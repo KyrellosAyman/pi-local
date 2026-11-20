@@ -1,0 +1,10 @@
+{
+  "available": [
+    "demand.json",
+    "inventory.json"
+  ],
+  "required": [
+    "demand.json",
+    "signed-safety-report.pdf"
+  ]
+}

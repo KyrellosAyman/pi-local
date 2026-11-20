@@ -1,0 +1,26 @@
+[
+  {
+    "id": "A",
+    "kind": "measured",
+    "value": 12,
+    "source": "register-4"
+  },
+  {
+    "id": "B",
+    "kind": "estimate",
+    "value": 18,
+    "source": "memo-2"
+  },
+  {
+    "id": "C",
+    "kind": "unknown",
+    "value": null,
+    "source": "missing-signature"
+  },
+  {
+    "id": "D",
+    "kind": "measured",
+    "value": 7,
+    "source": "register-9"
+  }
+]

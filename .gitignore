@@ -14,10 +14,16 @@ __pycache__/
 *.exe
 *.dll
 .env
+.env.*
+.npmrc
+*.pfx
+*.p12
 auth.json
+auth-profiles.json
 credentials.json
 runtime/
 /agent-clients-v8/pi-gui/runtime-config.json
 /native-qwen/server-config*.json
 /native-qwen/server-state.json
 /native-qwen/launcher.lock
+/research/archive-32/workspace/output/

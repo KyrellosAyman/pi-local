@@ -1,0 +1,7 @@
+task,client,full_task_seconds,decode_tokens_per_second,automated_score_percent,natural_finish,prose_review
+R03,Pi,85.91,17.96,100,true,pass
+R03,Hermes,212.11,14.43,100,true,pass
+R03,OpenCode,584.33,11.55,100,true,correction-needed
+R05,Pi,81.34,18.47,100,true,pass
+R05,Hermes,261.29,13.33,100,true,pass
+R05,OpenCode,73.04,16.54,100,true,correction-needed

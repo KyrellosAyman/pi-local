@@ -176,7 +176,6 @@ def prepare(state, key, browser_only=False, workspace=None, calibration=False, r
             except FileNotFoundError:
                 downloads = str(Path(os.environ['USERPROFILE']) / 'Downloads')
         env.update(PI_IMAGE_DOWNLOADS=downloads, PI_IMAGE_OUTPUT=str(workspace / 'output'))
-    user = Path(os.environ['USERPROFILE'])
     user_python = site.getuserbase()
     env.update(PYTHONUSERBASE=user_python,
                PI_LOCAL_ANALYSIS_PYTHON=runtime['python'],
@@ -184,7 +183,9 @@ def prepare(state, key, browser_only=False, workspace=None, calibration=False, r
                PI_LOCAL_ANALYSIS_USERBASE=user_python,
                PI_SKILL_STORE=str(state / 'profile/skills'),
                PI_SKILL_BUNDLE=str(HERE / 'skills'),
-               PI_SKILL_SHARED=json.dumps([str(user / '.agents/skills'), str(user / '.codex/skills')]))
+               PI_SKILL_SHARED='[]')
+    if runtime.get('web_tools') is True:
+        env['PI_LOCAL_WEB_TOOLS'] = '1'
     return env
 
 

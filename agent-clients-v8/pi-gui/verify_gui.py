@@ -379,8 +379,10 @@ try:
   checks['work_blocked_until_plan']=ui.activity.item(ids[2])['values'][1]=='Error' and 'update_plan' in ui.tasks[ids[2]][2]
   checks['old_skill_cannot_do_new_stage']=(ui.activity.item(ids[10])['values'][1]=='Error' and
       'skill-creation' in ui.tasks[ids[10]][2] and 'Stage needs a skill' in ui.skill_log.get('1.0','end'))
+  web_enabled=backend.runtime_config().get('web_tools') is True
+  omitted_skill_tools={'prepare_prompt','publish_skill'} | (set() if web_enabled else {'research_skill'})
   checks['skill_workflow_on_provider_wire']=all(
-      set(backend.SKILL_TOOLS)-{'prepare_prompt','publish_skill'} <= set(records[i]['tools']) for i in (7,13))
+      set(backend.SKILL_TOOLS)-omitted_skill_tools <= set(records[i]['tools']) for i in (7,13))
   checks['skill_reference_and_publishing_are_only_offered_when_available']=(
       all('read_skill_reference' not in records[i]['tools'] for i in selection_requests) and
       all('publish_skill' not in record['tools'] for record in records[:finish_call]))
@@ -395,9 +397,12 @@ try:
       all(records[i]['tool_choice']=='required' and records[i]['tools']==['find_skills'] for i in discovery_requests) and
       all(records[i]['tool_choice'] in (None,'auto') for i in (3,6,7,12,13)))
   checks['skill_selection_excludes_gated_work_on_provider_wire']=(
-      all({'use_skill','research_skill','update_plan'} <= set(records[i]['tools']) and
+      all({'use_skill','update_plan'} <= set(records[i]['tools']) and
           operation not in records[i]['tools'] and 'write' not in records[i]['tools'] for i in selection_requests) and
       all(operation in records[i]['tools'] for i in (7,13)))
+  checks['web_tools_require_explicit_opt_in']=(
+      all(('research_skill' in records[i]['tools']) == web_enabled for i in selection_requests) and
+      (web_enabled or all('read_website' not in record['tools'] for record in records)))
   checks['bootstrap_and_active_skill_on_wire']=(
       'Prompt Engineer' in json.dumps(records[0]['messages']) and 'Skill Creation' in json.dumps(records[0]['messages'])
       and 'pi_skill_state' in json.dumps(records[5]['messages']))
@@ -433,7 +438,8 @@ try:
    checks['inline_tool_command_and_recovery_visible']=all(word in ui.chat.get('1.0','end') for word in
        ('Write-Output PI_GUI_STALL','Repeated check refused',script_name))
    checks['media_tools_and_repo_navigation_on_wire']=all(
-       set(backend.ANALYSIS_TOOLS) | {'grep','find','ls'} <= set(record['tools'])
+       (set(backend.ANALYSIS_TOOLS) - (set() if web_enabled else {'read_website'}))
+       | {'grep','find','ls'} <= set(record['tools'])
        for record in work_requests)
    checks['image_attachment_on_wire']=records[0]['image_parts']==1
    checks['tool_image_reaches_the_next_request']=ui.activity.item(ids[8])['values'][1]=='Done' and (

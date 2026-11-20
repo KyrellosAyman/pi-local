@@ -371,7 +371,7 @@ export function registerSkillWorkflow(pi) {
 			throw new Error("No readable reference in the active skill directories.");
 		});
 
-	tool("research_skill", "Research skill", "After local skill search, retrieve public evidence. An explicit URL opens that public page. A query naming one RFC opens its official text directly. Follow next_offset when the needed rule is beyond the excerpt.",
+	if (process.env.PI_LOCAL_WEB_TOOLS === "1") tool("research_skill", "Research skill", "After local skill search, retrieve public evidence. An explicit URL opens that public page. A query naming one RFC opens its official text directly. Follow next_offset when the needed rule is beyond the excerpt.",
 		Type.Object({ query: Type.Optional(string(180)), url: Type.Optional(string(2048)),
 			offset: Type.Optional(Type.Integer({ minimum: 0 })),
 			category: Type.Optional(Type.Union(["web", "repos", "social", "video"].map((value) => Type.Literal(value)))) }),

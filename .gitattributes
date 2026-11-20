@@ -1,1 +1,3 @@
 * text=auto eol=lf
+*.pdf binary
+research/uncertainty/** -text whitespace=cr-at-eol

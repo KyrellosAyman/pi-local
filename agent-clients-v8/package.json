@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "engines": {
-    "node": "24.18.0"
+    "node": "24.22.3"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.5.2"

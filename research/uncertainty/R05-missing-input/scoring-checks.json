@@ -1,0 +1,13 @@
+{
+  "version": "8.2",
+  "formula": "100 * sum(passed) / fixed_check_count",
+  "input_integrity": "separate acceptance gate, excluded from score",
+  "missing_check": "zero",
+  "checks": [
+    "file.report.md",
+    "result.can_claim_complete",
+    "result.known_demand",
+    "result.missing_inputs",
+    "result.status"
+  ]
+}

@@ -1,56 +1,33 @@
 # Pi Local
 
-Pi Local is a Windows desktop workspace for local model inference, tool use, and resumable jobs. Pi starts and stops its own authenticated loopback model service. Chats, workspaces, and recovery records stay on the computer.
+Pi Local is a Windows desktop harness for local model inference, tool use, and resumable jobs. Pi starts its own model service. The default release uses authenticated loopback, local workspace tools, and a checkout-specific state directory. It needs no API account or API key from the user.
 
-The first release is a source snapshot of the Windows setup. It includes the desktop app, local launcher, 64k tuning presets, workflow and recovery extensions, MCP examples, and test fixtures. Runtime binaries, weights, and machine-specific configuration are supplied locally.
+[Research paper, v0.1.1](research/pi-local-v0.1.1.pdf) · [Reproduction guide](docs/reproducibility.md) · [Evaluation ledger](research/evidence/2026-11-20.md) · [Releases](https://github.com/KyrellosAyman/pi-local/releases)
 
-## Run from source
+## Install on Windows
 
-Use Windows with Python 3.11, Tk, and Node.js 24.18.0. Supply a compatible CUDA llama-server build and its vendor DLL directory, matching model and projector GGUF files, and the model's chat template. The [optimized profile](native-qwen/optimized.example.json) lists the exact engine flags and expected model filename. The standard profile is also available.
-
-Create the Python environment and install the pinned Pi client:
-
-```powershell
-python -m venv .venv
-& .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-npm ci --prefix .\agent-clients-v8
-```
-
-Preview the setup with your asset paths:
+1. Download and extract the [latest release](https://github.com/KyrellosAyman/pi-local/releases/latest) into a writable folder.
+2. Install [Node.js 24.22.3 x64](https://nodejs.org/dist/v24.22.3/) and use Python 3.12.16 x64 or newer in the 3.12 series, with Tk. If you need Python, download the [verified portable build](docs/reproducibility.md#python-for-windows). Open a new PowerShell window in the extracted repository.
+3. Run the two commands below. Setup verifies the exact model, projector, engine, and CUDA files against the [asset manifest](native-qwen/windows-assets.json).
 
 ```powershell
-& .\.venv\Scripts\python.exe .\configure.py --plan `
-  --engine 'C:\LocalAI\engine\llama-server.exe' `
-  --vendor-dir 'C:\LocalAI\engine\cuda' `
-  --model 'C:\LocalAI\models\Qwen3.8-27B-Uncensored-IQ4_XS.gguf' `
-  --projector 'C:\LocalAI\models\mmproj.gguf' `
-  --chat-template 'C:\LocalAI\models\chat-template.jinja'
+& '.\Setup Pi.ps1' -Download
+& '.\Start Pi.ps1'
 ```
 
-Repeat the command with `--plan` removed, then run `& '.\Start Pi.ps1'`. Add `--desktop-driver` with the path to a compatible Windows MCP driver to enable desktop and Chrome actions. The source snapshot starts with the 64k profile. Port 1235 must be available for a new native service.
+For portable Python, add `-Python 'C:\path\to\python\python.exe'` to the setup command. Use the path where you extracted it.
 
-### Optional local media
+The measured GPU was an RTX 5060 Ti with 16 GB VRAM and 63.8 GiB host RAM. Use a compatible NVIDIA driver and leave approximately 22 GB of disk space for one profile and its extracted runtime. Fit and speed vary with hardware and other running applications. Setup writes configuration and installs dependencies. The model starts when Pi sends its first prompt. Port 1235 must be free for this checkout's service.
 
-Install `PyMuPDF==1.27.2.2` in the Python environment for PDF tools. Use `numpy==2.2.6` and `onnxruntime==1.20.1` for audio analysis. Supply the media assets under `agent-clients-v8/pi-gui/runtime/audio/`.
+In Pi, choose a workspace and send a short prompt. By default this release keeps chats, recoverable jobs and its starter workspace under the ignored `.local/` directory. The settings panel can unload an idle model. Use launcher status and stop commands from the reproduction guide when checking ownership.
 
-- `ffmpeg/` contains the FFmpeg and FFprobe executables. Both are used by local media inspection.
-- `yamnet/` contains `yamnet.onnx` and `yamnet_class_map.csv` for sound event estimates.
-- `nemo-speech/` contains the application and DLLs used for speech recognition. Place `parakeet-tdt-0.6b-v3.q8_0.gguf` alongside that directory.
+For cached downloads, an offline setup path, the original no-MTP profile, native smoke checks, optional media and desktop drivers, and the synthetic benchmark, see the [reproduction guide](docs/reproducibility.md).
 
-The audio tools verify the binary and model digests from the [media manifest](agent-clients-v8/pi-gui/media/runtime-pins.json) and the sound event model pin in [inspect_input.py](agent-clients-v8/pi-gui/inspect_input.py).
+## Research archive
 
-## Use Pi
+Starting with 0.1.1, each verified release contains a matching PDF and an editable Markdown source. The evidence ledger records wins, failed variants, and pending qualification separately. Version 0.1.0 was the original desktop source snapshot.
 
-Select a workspace and send a prompt from the composer. The plan, tool activity, and model metrics appear alongside chat. Stop cancels the active Pi job. The recovery record stays with the chat and allows Pi to reconcile tool effects after interruption. Built-in skills guide tool discovery and stage verification.
-
-The [text MCP example](agent-clients-v8/pi-gui/examples/text-integrity-mcp.py) and [workspace job server](agent-clients-v8/pi-gui/pi_process_mcp.py) can be registered in Pi's local profile. The [Pi tool catalog skill](agent-clients-v8/pi-gui/skills/pi-tool-catalog/SKILL.md) covers discovery and schema lookup.
-
-## Check the setup
-
-After configuring a checkout, run the recovery fixture from PowerShell:
-
-```powershell
-& .\.venv\Scripts\python.exe -B .\agent-clients-v8\pi-gui\verify_job_recovery.py
-```
-
-It uses a loopback mock provider to test restart, compaction, file readback, and duplicate-write refusal. See the [release workflow](docs/releasing.md) and the [Strata evaluation](docs/strata-evaluation.md).
+- [Paper source](research/PAPER.md)
+- [Release history and update workflow](docs/releasing.md)
+- [Strata review](docs/strata-evaluation.md)
+- [Security and data handling](SECURITY.md)

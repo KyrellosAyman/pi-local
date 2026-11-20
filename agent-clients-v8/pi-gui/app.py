@@ -2119,6 +2119,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--watch-image', action='store_true')
     parser.add_argument('--workspace', type=Path, default=backend.ROOT)
+    parser.add_argument('--state-dir', type=Path, help='Use an isolated directory for local chats and job state.')
     parser.add_argument('--prompt-file', type=Path, help='Submit one UTF-8 prompt when opening Pi.')
     parser.add_argument('--background-job', action='store_true',
                         help='Start or recover a job in a hidden window, then close after its terminal outcome is saved.')
@@ -2132,7 +2133,7 @@ if __name__ == '__main__':
                                    or options.browser_session or options.evidence or options.watch_image):
         parser.error('--background-job requires --prompt-file or --recover-only with normal Pi tools.')
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(ctypes.c_wchar_p(APP_USER_MODEL_ID))
-    state = Path(os.environ['LOCALAPPDATA']) / 'LocalPiGUI'
+    state = options.state_dir.resolve() if options.state_dir else Path(os.environ['LOCALAPPDATA']) / 'LocalPiGUI'
     pending_recovery = (state / 'recovery/active-job.json').is_file() or context_switch.lease_file(state / 'recovery').is_file()
     startup_prompt = None
     if options.prompt_file:
@@ -2146,7 +2147,7 @@ if __name__ == '__main__':
             parser.error('--prompt-file is empty.')
     if options.recover_only and not pending_recovery:
         raise SystemExit(0)
-    state.mkdir(exist_ok=True)
+    state.mkdir(parents=True, exist_ok=True)
     instance = (state / 'instance.lock').open('a+b')
     instance.seek(0)
     try:

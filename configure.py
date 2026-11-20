@@ -5,6 +5,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+import re
 from secrets import token_hex
 import shutil
 import subprocess
@@ -15,7 +16,7 @@ from tempfile import NamedTemporaryFile
 ROOT = Path(__file__).resolve().parent
 NATIVE = ROOT / "native-qwen"
 GUI = ROOT / "agent-clients-v8/pi-gui"
-NODE_VERSION = "v24.18.0"
+NODE_VERSION = "v24.22.3"
 
 
 def existing(parser, name, path, *, directory=False):
@@ -50,8 +51,9 @@ def main():
     parser.add_argument("--vendor-dir")
     parser.add_argument("--model", required=True)
     parser.add_argument("--projector", required=True)
-    parser.add_argument("--chat-template", required=True)
+    parser.add_argument("--chat-template", default=NATIVE / "chat-template.jinja")
     parser.add_argument("--desktop-driver")
+    parser.add_argument("--enable-web-tools", action="store_true", help="Offer Pi's optional public webpage tools.")
     parser.add_argument("--profile", choices=("optimized", "standard"), default="optimized")
     parser.add_argument("--plan", action="store_true", help="Validate inputs and print planned changes without writing.")
     args = parser.parse_args()
@@ -79,9 +81,12 @@ def main():
                "native_config_sha256": sha256(encoded(config)).hexdigest()}
     if driver:
         runtime["desktop_driver"] = str(driver)
+    if args.enable_web_tools:
+        runtime["web_tools"] = True
     if args.plan:
         print(json.dumps({"profile": args.profile, "endpoint": "127.0.0.1:1235", "context": 64000,
                           "desktop_driver_configured": bool(driver),
+                          "web_tools_configured": args.enable_web_tools,
                           "planned_files": ["native-qwen/server-config.json",
                                             "agent-clients-v8/pi-gui/runtime-config.json", ".local/loopback.key"]}))
         return
@@ -93,6 +98,8 @@ def main():
     if not key.exists():
         with key.open("x", encoding="utf-8") as stream:
             stream.write(token_hex(32) + "\n")
+    if key.is_symlink() or not re.fullmatch(r"[a-f0-9]{64}", key.read_text(encoding="utf-8").strip()):
+        parser.error("The existing loopback credential is invalid. Stop this checkout's service before replacing it.")
     write_json(target, config)
     write_json(GUI / "runtime-config.json", runtime)
     print("Configured the local 64k profile. Use Start Pi.ps1 to open the app.")

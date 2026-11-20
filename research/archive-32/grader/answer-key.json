@@ -1,0 +1,55 @@
+{
+  "page_seals": {
+    "01": "RAHH4ASOVMIO",
+    "02": "R2C5B2FVYZLC",
+    "03": "DM3O3FGQ6MTM",
+    "04": "HPB675YJRXLP",
+    "05": "4DL76P4OAP4F",
+    "06": "3YWI5IIVMS33",
+    "07": "QDAEKCDFO45I",
+    "08": "ID7KFLWIWOAV",
+    "09": "UM6UDDFGEXEL",
+    "10": "BJVILQYGLNZK",
+    "11": "6AWUDIXUJSUA",
+    "12": "NW4IB2P27OD4",
+    "13": "G4UNCLUSUMEJ",
+    "14": "ZMYSCCZQPN7M",
+    "15": "ZDIWFQDVWNUN",
+    "16": "5KLDQGDYZTYU",
+    "17": "KUOBSDTYMJOS",
+    "18": "CWQMLD7O5KBO",
+    "19": "7N7VZUL5XJAL",
+    "20": "ZEFUHWXK6CHF",
+    "21": "TZZBAFLF4PP7",
+    "22": "TI7B5F2BN36F",
+    "23": "DELC3ATQTT2L",
+    "24": "UICQ5DUPMLE6",
+    "25": "2EW5R2YPRBBG",
+    "26": "HWAM5DROTRQL",
+    "27": "LFZFQSCSOD6P",
+    "28": "WXU3GPCVRHGQ",
+    "29": "ULXXHL2M3L47",
+    "30": "TUKHLXBQUHYF",
+    "31": "AVHSC2XVUSAA",
+    "32": "JYCNPJ3DZ4UB"
+  },
+  "lantern": {
+    "id": "ZLCGDXFD7C6YG3HIWS",
+    "bytes": 402653184,
+    "backup_id": "5A5W2LRUBVKKOYD7RR",
+    "sha256": "77185990a5c9fe594e0a741b67bae1cdb0bb360a9aa89957fc5fde6126c4564f"
+  },
+  "gallery": {
+    "id": "DQOF2GX6HV2RPLUSY6",
+    "bytes": 103079215104,
+    "backup_id": null
+  },
+  "pending": {
+    "job_id": "TQ3XJ5KLUPZSROLGFW",
+    "asset_id": "DQOF2GX6HV2RPLUSY6",
+    "state": "pending",
+    "outcome": "unknown"
+  },
+  "superseded_page": 17,
+  "correction_page": 27
+}

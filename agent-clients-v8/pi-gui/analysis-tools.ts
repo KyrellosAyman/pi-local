@@ -71,6 +71,7 @@ export default function analysisTools(pi) {
 			Type.Object({ url: Type.String(), offset: Type.Optional(nonnegative) })],
 	];
 	for (const [name, label, description, mode, parameters] of tools) {
+		if (name === "read_website" && process.env.PI_LOCAL_WEB_TOOLS !== "1") continue;
 		pi.registerTool({
 			name, label, description, parameters,
 			async execute(_id, input, signal, _onUpdate, ctx) {

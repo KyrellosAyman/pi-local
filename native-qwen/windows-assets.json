@@ -1,0 +1,32 @@
+{
+  "engine": {
+    "file": "llama-b12541-bin-win-cuda-13.5-x64.zip",
+    "bytes": 228975528,
+    "sha256": "937d18bddcd0a258c515569792417476fe6eafbe18130860102249faa76d597e",
+    "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12541/llama-b12541-bin-win-cuda-13.5-x64.zip"
+  },
+  "cuda": {
+    "file": "cudart-llama-bin-win-cuda-13.5-x64.zip",
+    "bytes": 426314199,
+    "sha256": "c2bf4cc202bfbaaa7a0b75f5082457c3811326947bb216059b72839d844e9cba",
+    "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12541/cudart-llama-bin-win-cuda-13.5-x64.zip"
+  },
+  "optimized": {
+    "file": "Qwen3.8-27B-Uncensored-IQ4_XS.gguf",
+    "bytes": 15309039008,
+    "sha256": "53adc4bbed67044d662273356bbf3a50fdec667ac21bbf18d13e5815fbccc7f5",
+    "url": "https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF/resolve/45d0fc0ad6cfcf9eeee6008ddaea925536409b18/Qwen3.8-27B-Uncensored-IQ4_XS.gguf"
+  },
+  "standard": {
+    "file": "Qwen3.8-27B-Uncensored-noMTP-IQ4_XS.gguf",
+    "bytes": 15082506720,
+    "sha256": "21969928166406e8b3b63249568fb28d54a3c595c0793756acdf0d38cd73bc77",
+    "url": "https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF/resolve/45d0fc0ad6cfcf9eeee6008ddaea925536409b18/Qwen3.8-27B-Uncensored-noMTP-IQ4_XS.gguf"
+  },
+  "projector": {
+    "file": "mmproj-Qwen3.8-27B-Uncensored-F16.gguf",
+    "bytes": 927606912,
+    "sha256": "5ac423f8a29059dc24e51bc6a43e9380dcd57a9347f28b62591e0b3f60b7081c",
+    "url": "https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF/resolve/45d0fc0ad6cfcf9eeee6008ddaea925536409b18/mmproj-Qwen3.8-27B-Uncensored-F16.gguf"
+  }
+}

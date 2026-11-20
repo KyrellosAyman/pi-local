@@ -1,0 +1,17 @@
+{
+  "version": "8.2",
+  "formula": "100 * sum(passed) / fixed_check_count",
+  "input_integrity": "separate acceptance gate, excluded from score",
+  "missing_check": "zero",
+  "checks": [
+    "file.report.md",
+    "report.word_count",
+    "result.estimated_total",
+    "result.evidence.A",
+    "result.evidence.B",
+    "result.evidence.C",
+    "result.evidence.D",
+    "result.measured_total",
+    "result.unknown_ids"
+  ]
+}
