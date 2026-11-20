@@ -1,0 +1,10 @@
+beautifulsoup4==4.12.3
+markdown-it-py==4.0.0
+mcp==1.23.3
+openpyxl==3.1.5
+Pillow==11.3.0
+psutil==5.9.6
+pydantic==2.11.7
+python-docx==1.2.0
+pywin32==311
+typing-extensions==4.15.0

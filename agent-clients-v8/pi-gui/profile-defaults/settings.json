@@ -1,0 +1,8 @@
+{
+  "defaultProvider": "qwen-local",
+  "defaultModel": "qwen3.8-27b-uncensored",
+  "defaultThinkingLevel": "medium",
+  "defaultProjectTrust": "never",
+  "enableInstallTelemetry": false,
+  "enableAnalytics": false
+}

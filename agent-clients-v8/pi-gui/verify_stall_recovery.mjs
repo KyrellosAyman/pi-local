@@ -1,0 +1,153 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { registerStallRecovery } from "./stall-recovery.ts";
+
+const handlers = new Map();
+const receipts = [];
+let stage = "verify";
+const recordReview = registerStallRecovery({ on: (name, fn) => handlers.set(name, fn), appendEntry: (_, receipt) => receipts.push(receipt) }, () => stage);
+const call = handlers.get("tool_call");
+const result = handlers.get("tool_result");
+const command = { toolCallId: "check", toolName: "powershell", input: { command: "node debug.js" } };
+const stale = { ...command, isError: false, content: [{ type: "text", text: "equal: false\nfull equal: false" }] };
+const progress = { ...stale, content: [{ type: "text", text: "equal: true\nfull equal: true" }] };
+
+assert.equal(result(stale), undefined);
+assert.equal(call(command), undefined);
+assert.match(result(stale).details.stallRecovery, /independent reference/);
+assert.ok(call(command).block);
+assert.equal(call({ ...command, input: { command: "Compare with outside reference" } }), undefined);
+result({ toolName: "edit", isError: false });
+assert.equal(call(command), undefined);
+assert.equal(result(progress), undefined);
+assert.equal(call(command), undefined);
+result(progress);
+assert.equal(call(command).terminate, false);
+assert.equal(call(command).terminate, false);
+assert.equal(call(command).terminate, true);
+stage = "report";
+assert.equal(call(command), undefined);
+handlers.get("before_agent_start")({ messageType: "user" });
+stage = "verify";
+assert.equal(call(command), undefined);
+assert.ok(receipts.some((receipt) => receipt.action === "terminate"));
+
+const check = { ...command, input: { command: "node check.js" } };
+const wrapped = { ...check, input: { command: "node check.js 2>&1 | Out-String" } };
+const failed = (event, output) => ({ ...event, isError: true, content: [{ type: "text", text: output }] });
+assert.equal(result(failed(check, "Error: output order mismatch\n    at check.js:37:8")), undefined);
+result({ toolName: "edit", isError: false });
+assert.equal(call(check), undefined);
+assert.match(result(failed(wrapped, "DEBUG\nError: output order mismatch<CR>\n    at check.js:52:8")).details.stallRecovery,
+	/required representation against an independent reference/);
+assert.ok(receipts.at(-1).repeatedDiagnostic);
+assert.ok(call(wrapped).block);
+assert.equal(call({ ...wrapped, input: { command: "Compare output bytes with reference" } }), undefined);
+result({ toolName: "edit", isError: false });
+assert.equal(call(wrapped), undefined);
+assert.equal(result({ ...wrapped, isError: false, content: [{ type: "text", text: "Output order matched" }] }), undefined);
+assert.equal(call(wrapped), undefined);
+stage = "another-stage";
+assert.equal(result(failed(check, "Error: output order mismatch\n    at check.js:37:8")), undefined);
+
+const compound = { ...check, input: { command: "cd work; node fix.mjs; node check.mjs" } };
+result(failed(compound, "patched A\nSpec sample: FAIL\nactual: a\nexpected: b\nCommand exited with code 1"));
+result({ toolName: "edit", isError: false });
+assert.match(result(failed(compound, "patched B\nSpec sample: FAIL\nactual: a\nexpected: c\nCommand exited with code 1")).details.stallRecovery,
+	/run_script/);
+result({ toolName: "write", isError: false });
+assert.match(call(compound).reason, /run_script/);
+const standalone = { ...compound, toolName: "run_script", input: { path: "check.mjs" } };
+assert.equal(call(standalone), undefined);
+
+stage = "parser";
+const inline = { ...check, input: { command: "node -e 'malformed script'" } };
+const parserError = "At line:4 char:42\n+ $new = ...\nUnexpected token 'x' in expression or statement.\n    + FullyQualifiedErrorId : UnexpectedToken";
+assert.match(result(failed(inline, parserError)).details.stallRecovery, /run_script/);
+assert.match(call({ ...inline, input: { command: "node -e 'another malformed script'" } }).reason, /run_script/);
+assert.equal(call({ ...inline, input: { command: "Get-Content fixture.json" } }), undefined);
+assert.equal(call(standalone), undefined);
+assert.equal(call(inline).terminate, false);
+assert.equal(call(inline).terminate, true);
+stage = "next";
+assert.equal(call(inline), undefined);
+
+const image = (id, bytes = id) => ({ toolCallId: id, toolName: "view_image_file", input: { path: `${id}.png` },
+	isError: false, content: [{ type: "text", text: "frame 0" }, { type: "image", data: bytes, mimeType: "image/png" }] });
+assert.equal(result(image("one")), undefined);
+const same = result(image("alias", "one"));
+assert.equal(same.content.length, 2);
+assert.ok(same.content.every((part) => part.type === "text"));
+assert.match(same.content.at(-1).text, /earlier view/);
+assert.equal(receipts.at(-1).previous, "one");
+assert.ok(result(image("another-alias", "one")).content.every((part) => part.type === "text"));
+assert.equal(receipts.at(-1).previous, "one");
+assert.equal(result(image("changed", "updated")), undefined);
+handlers.get("session_compact")();
+assert.equal(result(image("after-cut", "one")), undefined);
+for (const id of ["six", "seven"]) assert.equal(result(image(id)), undefined);
+const checkpoint = result(image("eight"));
+assert.ok(checkpoint.content.some((part) => part.type === "image"));
+assert.match(checkpoint.content.at(-1).text, /update_plan/);
+assert.equal(call(standalone), undefined);
+assert.equal(call({ ...command, toolName: "read_document" }), undefined);
+const wire = handlers.get("before_provider_request");
+const choosePlan = { type: "function", function: { name: "update_plan" } };
+const readFile = { type: "function", function: { name: "read" } };
+const request = { messages: [], tools: [choosePlan, readFile], tool_choice: "auto" };
+const checkpointRequest = { ...request, tools: [choosePlan], tool_choice: "required" };
+assert.equal(wire({ payload: request }), undefined);
+assert.equal(call(image("nine")).terminate, false);
+assert.deepEqual(wire({ payload: request }), checkpointRequest);
+assert.deepEqual(request.tools, [choosePlan, readFile]);
+assert.equal(wire({ payload: { ...request, tools: [] } }), undefined);
+assert.equal(wire({ payload: { ...request, tool_choice: "none" } }), undefined);
+recordReview(" ");
+assert.deepEqual(wire({ payload: request }), checkpointRequest);
+assert.equal(call({ ...image("ten"), toolName: "sample_video" }).terminate, false);
+assert.equal(call(image("eleven")).terminate, true);
+recordReview("Frame 24 establishes the transition. Check frame 25 on the repaired render.");
+assert.equal(wire({ payload: request }), undefined);
+assert.equal(call(image("after-review")), undefined);
+for (let n = 0; n < 8; n++) result(image(`new-${n}`));
+recordReview("  FRAME 24 establishes the transition.  Check frame 25 on the repaired render. ");
+assert.ok(call(image("stale-plan")).block);
+stage = "next-scene";
+assert.equal(call(image("other-stage")), undefined);
+handlers.get("before_agent_start")({ messageType: "user" });
+stage = "next";
+assert.equal(call(image("new-turn")), undefined);
+
+stage = "mixed-review";
+const readImage = (id, bytes = id) => ({ ...image(id, bytes), toolName: "read" });
+assert.equal(result(image("original")), undefined);
+const alias = readImage("alias", "original");
+alias.content[0].text = "Read from a different path";
+assert.match(result(alias).content.at(-1).text, /earlier view/);
+for (let n = 0; n < 5; n++) assert.equal(result(readImage(`read-${n}`)), undefined);
+assert.match(result(readImage("eighth")).content.at(-1).text, /update_plan/);
+const cwd = mkdtempSync(join(tmpdir(), "pi-stall-review-"));
+try {
+	writeFileSync(join(cwd, "unlabeled-frame"), Buffer.from("89504e470d0a1a0a0000000d49484452", "hex"));
+	writeFileSync(join(cwd, "plain-text.png"), "Frame note");
+	const ninth = { ...readImage("ninth"), input: { path: "unlabeled-frame" } };
+	assert.match((await call(ninth, { cwd })).reason, /update_plan/);
+	assert.equal(await call({ ...ninth, input: { path: "plain-text.png" } }, { cwd }), undefined);
+} finally {
+	unlinkSync(join(cwd, "unlabeled-frame"));
+	unlinkSync(join(cwd, "plain-text.png"));
+	rmdirSync(cwd);
+}
+const documentation = { toolName: "read", input: { path: "frame-notes.md" }, isError: false,
+	content: [{ type: "text", text: "Frame 20 note" }] };
+assert.equal(call(documentation), undefined);
+assert.equal(result(documentation), undefined);
+const odd = { ...readImage("extensionless"), input: { path: "snapshot" } };
+assert.equal(call(odd), undefined);
+const withheld = result(odd);
+assert.ok(withheld.isError && withheld.content.every((part) => part.type === "text"));
+recordReview("Frame 60 is the last clean hold. Check the new release on the revised clip.");
+assert.equal(call(readImage("candidate")), undefined);
+console.log("Repeated checks redirect, batched visual reviews require a progress update, and unique evidence proceeds.");

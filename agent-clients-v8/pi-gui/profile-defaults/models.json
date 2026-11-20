@@ -1,0 +1,59 @@
+{
+  "providers": {
+    "qwen-local": {
+      "baseUrl": "http://127.0.0.1:1235/v1",
+      "api": "openai-completions",
+      "authHeader": true,
+      "models": [
+        {
+          "id": "qwen3.8-27b-uncensored",
+          "name": "Local Qwen Uncensored",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 64000,
+          "maxTokens": 4096,
+          "thinkingLevelMap": {
+            "minimal": "low",
+            "low": "low",
+            "medium": "medium",
+            "high": "xhigh",
+            "xhigh": "xhigh",
+            "max": "xhigh"
+          },
+          "samplingParams": {
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "top_k": 20,
+            "min_p": 0,
+            "repeat_penalty": 1
+          },
+          "samplingParamsByThinkingLevel": {
+            "off": {
+              "reasoning_effort": "none",
+              "reasoning_budget_tokens": 0
+            },
+            "low": {
+              "reasoning_effort": "low",
+              "reasoning_budget_tokens": 256
+            },
+            "medium": {
+              "reasoning_effort": "medium",
+              "reasoning_budget_tokens": 1024
+            },
+            "high": {
+              "reasoning_effort": "xhigh",
+              "reasoning_budget_tokens": 4096
+            }
+          },
+          "compat": {
+            "maxTokensField": "max_tokens"
+          }
+        }
+      ],
+      "apiKey": "$PI_T03_API_KEY"
+    }
+  }
+}
