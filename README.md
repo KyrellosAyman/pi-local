@@ -31,3 +31,9 @@ Starting with 0.1.1, each verified release contains a matching PDF and an editab
 - [Release history and update workflow](docs/releasing.md)
 - [Strata review](docs/strata-evaluation.md)
 - [Security and data handling](SECURITY.md)
+
+## Contributing and license
+
+Contributions are welcome through forks and pull requests. See the [contribution guide](CONTRIBUTING.md) and [code of conduct](CODE_OF_CONDUCT.md).
+
+Pi Local’s original material is available under the [Apache License 2.0](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) for separately licensed material.
