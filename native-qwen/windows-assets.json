@@ -28,5 +28,23 @@
     "bytes": 927606912,
     "sha256": "5ac423f8a29059dc24e51bc6a43e9380dcd57a9347f28b62591e0b3f60b7081c",
     "url": "https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF/resolve/45d0fc0ad6cfcf9eeee6008ddaea925536409b18/mmproj-Qwen3.8-27B-Uncensored-F16.gguf"
+  },
+  "workspace_tools": {
+    "ripgrep": {
+      "file": "ripgrep-15.2.0-x86_64-pc-windows-msvc.zip",
+      "bytes": 1789611,
+      "sha256": "71b2fef860abe467217a538ff31de02f5258807c0129f771846f87bd029aafc5",
+      "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-pc-windows-msvc.zip",
+      "member": "ripgrep-15.2.0-x86_64-pc-windows-msvc/rg.exe",
+      "member_sha256": "14231169855ec5205cf5a1b6f1db358ff4aed4247c86b69ce8aae647c77f6680"
+    },
+    "fd": {
+      "file": "fd-v10.5.2-x86_64-pc-windows-msvc.zip",
+      "bytes": 1564536,
+      "sha256": "7edac75ef96b7e9a01ebb251a21ee86ea365a09adcfb865f1ec3346a906153b6",
+      "url": "https://github.com/sharkdp/fd/releases/download/v10.5.2/fd-v10.5.2-x86_64-pc-windows-msvc.zip",
+      "member": "fd-v10.5.2-x86_64-pc-windows-msvc/fd.exe",
+      "member_sha256": "2fe8ed92c57e0d1b3a84b66cf69ec8fac15330d0012147a64b4be521bbddfa83"
+    }
   }
 }

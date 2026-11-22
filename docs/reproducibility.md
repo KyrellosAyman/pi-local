@@ -10,6 +10,8 @@ Use the [Windows quick start](../README.md). For a manual or cached download, us
 
 Run `& '.\Setup Pi.ps1'` to install the hash-pinned Python and Node dependencies and verify the cached assets. Once dependencies are already present, add `-OfflineDependencies` for setup without downloads. Use `-Profile standard` to select the published no-MTP 64k preset. The historical archive's original runtime and host are described in the paper. The standard preset uses the same public asset distribution and b12541 engine, so report that difference when comparing with historical timings.
 
+Setup verifies and unpacks the ripgrep and fd archives listed in `native-qwen/windows-assets.json`. Pi uses these binaries for its offline `grep` and `find` tools. To prepare an offline installation, copy the two pinned ZIP files into `.local/assets` with the other runtime assets.
+
 Configuration uses the bundled, pinned chat template by default. Experienced users can bind custom assets with `configure.py --engine ... --vendor-dir ... --model ... --projector ...`. Add `--plan` to see what would be written. Optional `--desktop-driver PATH` and `--enable-web-tools` expose the corresponding tools. Use a compatible independently obtained driver and reconfigure it only if those workflows are needed.
 
 If a cache checksum fails, replace the named local file with its exact upstream download. A file ending in `.part` is a partial download. Setup promotes it only after verifying both byte count and digest. Use a fresh cache directory if an installed runtime file was changed.
@@ -38,10 +40,15 @@ Run these from the repository root after installing the desktop dependencies.
 & .\.venv\Scripts\python.exe -B .\agent-clients-v8\pi-gui\verify_gui.py
 & .\.venv\Scripts\python.exe -B .\agent-clients-v8\pi-gui\verify_job_recovery.py
 node .\agent-clients-v8\pi-gui\verify_stall_recovery.mjs
+node .\agent-clients-v8\pi-gui\verify_skill_availability.mjs
+node .\agent-clients-v8\pi-gui\verify-skill-reuse.mjs
+node .\agent-clients-v8\pi-gui\verify-checkpoint-protection.mjs
 & .\.venv\Scripts\python.exe -B .\research\archive-32\grade.py --recorded
 ```
 
-The GUI fixtures use Tk and a separate mock loopback port. They cover profile defaults, exact tool writes, stream and rendering state, and process restart. The recorded archive check reproduces exact input hashes and sequential line-range coverage from the released summary.
+The launcher suite reads the tracked profile example and uses temporary fixture files. It runs before asset download or model configuration. The GUI fixtures use Tk and a separate mock loopback port. They cover profile defaults, exact tool writes, stream and rendering state, and process restart. The Python script runner suppresses import bytecode caches. The restart fixture checks that an imported input produces no cache file. The recorded archive check reproduces exact input hashes and sequential line-range coverage from the released summary.
+
+For a stage that declares a checkpoint, keep the completed outputs listed under `finished_files` in its checkpoint JSON, with `path` and `sha256` on each entry. Pi refuses direct writes and edits to those paths while their owning stage remains completed. It checks the saved digests on resume and settlement. Write a separate revision or explicitly reopen the step for a planned change.
 
 ## Repeat the 32-page archive workload
 
@@ -63,8 +70,17 @@ Copy each [R03 and R05 workspace](../research/uncertainty/) to separate scratch 
 ## Optional local components
 
 - Local MCP examples include the [text checksum server](../agent-clients-v8/pi-gui/examples/text-integrity-mcp.py) and [workspace script server](../agent-clients-v8/pi-gui/pi_process_mcp.py). Register only explicitly chosen servers in the checkout's local Pi profile.
-- PDF inspection uses PyMuPDF 1.27.2.2. Audio analysis uses NumPy 2.2.6 and ONNX Runtime 1.20.1. Install only the extra modules you need into the same Python environment.
-- Place verified audio and video components under `agent-clients-v8/pi-gui/runtime/audio/`. Use `ffmpeg/` for the pinned FFmpeg and FFprobe files, `yamnet/` for the ONNX model and CSV label map, and `nemo-speech/` for the native speech engine and DLLs. Place the pinned Parakeet GGUF beside those directories. Compare digests to the [media asset manifest](../agent-clients-v8/pi-gui/media/runtime-pins.json) and [sound model pin](../agent-clients-v8/pi-gui/inspect_input.py). Optional media branches need their compatible upstream downloads. Their private historical media and production workspaces are outside this reproduction bundle.
+- PDF inspection uses PyMuPDF 1.27.2.2. To set up audio analysis, run `& '.\Setup Pi.ps1' -Audio -Download` from the checkout. Setup installs the pinned audio packages in Pi’s Python environment and verifies the local media runtime against the published digests. For an offline setup, use `-OfflineDependencies -Audio` with the audio Python packages already installed. Provide the files named in the media manifest under `.local/assets/` or keep the verified installed runtime. [Pinned audio packages](../requirements-audio.txt) [Media manifest](../agent-clients-v8/pi-gui/media/runtime-pins.json)
+
+Place verified audio and video components under `agent-clients-v8/pi-gui/runtime/audio/`.
+
+- The FFmpeg 9.1 Essentials archive supplies the pinned `ffmpeg.exe` and `ffprobe.exe` in `ffmpeg/`. The reports prior to this installation used the 30 November 2023 build from revision `a30adf9f96`. [FFmpeg 9.1 Windows release](https://github.com/GyanD/codexffmpeg/releases/tag/9.1)
+- From NVIDIA's [NeMo-Speech.cpp v0.3.0 release](https://github.com/NVIDIA/NeMo-Speech.cpp/releases/tag/v0.3.0), download `nemo-speech-0.3.0-windows-x86_64-vulkan.zip`, verify its release SHA-256, and copy the archive's `bin/` contents to `nemo-speech/`. Pi invokes the speech engine on the CPU.
+- Put the pinned [Parakeet Q8 GGUF](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/blob/541d1f99c6b0c3cd0b11a95167540bb8edefd82b/parakeet-tdt-0.6b-v3.q8_0.gguf) next to these folders. Place `yamnet.onnx` and `yamnet_class_map.csv` from the [pinned YAMNet conversion](https://huggingface.co/audiomagic/yamnet-onnx/tree/f25b741c2f0bdc6d7e6db24b5fddda23347dbafd) in `yamnet/`. The label map's SHA-256 is `cdf24d193e196d9e95912a2667051ae203e92a2ba09449218ccb40ef787c6df2`.
+
+For the optional Chrome workflow, open the approved page in the intended Chrome window. Pi checks that the current address and the accessible page document identify the same page before exposing its controls. If Windows exposes only Chrome’s toolbar, finish your browser work and exit Chrome completely. Start Chrome with `--force-renderer-accessibility=complete` and reopen the approved page. See the [Chromium accessibility documentation](https://chromium.googlesource.com/chromium/src/+/HEAD/tools/accessibility/inspect/).
+
+In Pi, select **Audio report**, choose a local recording, then set the window and optional channel. Pi displays decoded levels and their channel references, plus provisional sound labels and a speech transcript. This route uses the local media runtime directly and requires no chat model. The audio alone leaves the recording setup and speaker identities unresolved.
 
 The paper discusses additional science, Android, repository, video, and integration cases. The public release includes their measured summaries. Exact reruns that depend on private projects, signed-in accounts, or unpublished graders still need a separate public fixture. Use your own equivalent input and document the difference.
 
@@ -74,7 +90,8 @@ Install [the paper requirements](../research/requirements.txt) in the same virtu
 
 ```powershell
 & .\.venv\Scripts\python.exe -m pip install -r .\research\requirements.txt
-& .\.venv\Scripts\python.exe -B .\research\render_paper.py 0.1.1
+& .\.venv\Scripts\python.exe -B .\research\render_paper.py 0.1.2
+& .\.venv\Scripts\python.exe -B .\research\render_paper.py 0.1.2 --check
 ```
 
-The [editable source](../research/PAPER.md) and [rendered PDF](../research/pi-local-v0.1.1.pdf) are both part of the release.
+This checkout contains the [editable report](../research/PAPER.md), the [0.1.2 PDF](../research/pi-local-v0.1.2.pdf), and the [0.1.1 PDF](../research/pi-local-v0.1.1.pdf). The report documents both verified results and experiments that remain open.

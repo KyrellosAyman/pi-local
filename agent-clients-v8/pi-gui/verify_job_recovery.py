@@ -1,33 +1,44 @@
 """Exercise the actual Pi RPC process, including a killed child and a restarted GUI."""
 from datetime import datetime, timezone
+from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import tempfile
 import threading
 import time
 import tkinter as tk
+from types import SimpleNamespace
 
 from app import App
 import pi_backend as backend
-from job_recovery import Jobs
+from job_recovery import Jobs, session_file_path
 
 
 MODEL = backend.MODEL
 OBJECTIVE = 'Use the fixture to finish both recorded outputs and verify their exact contents.'
 FIRST = {'path': 'first.txt', 'content': 'original stage committed\n'}
 SECOND = {'path': 'second.txt', 'content': 'resumed stage committed\n'}
+SEALED = {'path': 'checkpointed.txt', 'content': 'verified earlier artifact\n'}
+MANIFEST = {'path': 'checkpoint.json', 'content': json.dumps({'finished_files': [
+    {'path': SEALED['path'], 'sha256': sha256(SEALED['content'].encode()).hexdigest()}]})}
 TOOL_WITNESS = 'Exact script result 197429, keep unchanged.'
 requests = []
 recovery = 'Continue the interrupted job in this session.'
 step = {'id': 'finish', 'title': 'Write and verify the outputs', 'skillQuery': 'general-task'}
+sealed_step = {'id': 'sealed', 'title': 'Seal the verified fixture', 'skillQuery': 'general-task',
+               'checkpoint': MANIFEST['path'], 'status': 'completed'}
+skill_route = [('find_skills', {'query': 'general-task'}),
+               ('use_skill', {'name': 'general-task', 'reason': 'General file work.'})]
 bootstrap = [('prepare_prompt', {'brief': OBJECTIVE, 'checks': ['Check both files.']}),
-             ('update_plan', {'steps': [{**step, 'status': 'in_progress'}]}),
-             ('find_skills', {'query': 'general-task'}),
-             ('use_skill', {'name': 'general-task', 'reason': 'General file work.'})]
-original = [*bootstrap, ('run_script', {'path': 'proof.py'}), ('write', FIRST)]
-resumed = [('read', {'path': FIRST['path']}), ('write', FIRST), ('write', SECOND),
-           ('update_plan', {'steps': [{**step, 'status': 'completed'}]})]
+             ('update_plan', {'steps': [{**step, 'status': 'pending'}, {**sealed_step, 'status': 'in_progress'}]}),
+             *skill_route]
+original = [*bootstrap, ('run_script', {'path': 'proof.py'}), ('write', FIRST), ('write', MANIFEST),
+            ('update_plan', {'steps': [{**step, 'status': 'in_progress'}, sealed_step]}), *skill_route]
+resumed = [('read', {'path': FIRST['path']}), ('write', FIRST),
+           ('edit', {'path': SEALED['path'], 'edits': [{'oldText': SEALED['content'], 'newText': 'unexpected rewrite\n'}]}),
+           ('write', SECOND), ('update_plan', {'steps': [{**step, 'status': 'completed'}]})]
 hold = threading.Event()
 ready_to_interrupt = threading.Event()
 
@@ -117,6 +128,31 @@ def destroy_gui(root):
     root.destroy()
 
 
+def verify_deep_session(workspace, temporary):
+    if os.name != 'nt':
+        return
+    state = temporary / ('deep-' + 'x' * (177 - len(str(temporary))))
+    state.mkdir()
+    jobs = Jobs(state)
+    jobs.sessions.mkdir()
+    session = jobs.sessions / ('y' * (260 - len(str(jobs.sessions)) - 7) + '.jsonl')
+    assert len(str(session)) == 260
+    payload = {'message': OBJECTIVE}
+    job = jobs.admit(session, workspace, payload, 'medium', SimpleNamespace(pid=os.getpid()))
+    assert job['previous_user'] is None and job['session'] == str(session)
+    transcript = [{'type': 'session', 'cwd': str(workspace)},
+                  {'type': 'message', 'id': 'one', 'message': {'role': 'user', 'content': OBJECTIVE}}]
+    readable = session_file_path(session)
+    try:
+        readable.write_text(''.join(json.dumps(row) + '\n' for row in transcript), encoding='utf-8')
+        assert backend.saved_chats(state)[0][1:] == (OBJECTIVE, session, workspace)
+        assert jobs.resume_prompt(job) == {'message': f"/local-pi-recover {job['id']}"}
+        jobs.archive(job, 'completed')
+        assert jobs.current() is None and len(list(jobs.directory.glob('*.admission.json'))) == 1
+    finally:
+        readable.unlink(missing_ok=True)
+
+
 def main():
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     assert server.server_address[1] != 1235
@@ -138,12 +174,18 @@ def main():
         workspace, state = Path(tmp) / 'workspace', Path(tmp) / 'state'
         workspace.mkdir()
         state.mkdir()
-        (workspace / 'proof.py').write_text(f'print({TOOL_WITNESS!r})\n', encoding='utf-8')
+        verify_deep_session(workspace, Path(tmp))
+        (workspace / 'fixture_input.py').write_text(f'WITNESS = {TOOL_WITNESS!r}\n', encoding='utf-8')
+        (workspace / 'proof.py').write_text('from fixture_input import WITNESS\nprint(WITNESS)\n', encoding='utf-8')
+        sealed = workspace / SEALED['path']
+        sealed.write_bytes(SEALED['content'].encode())
+        sealed_timestamp = sealed.stat().st_mtime_ns
         root, ui = create_gui(workspace, state)
         try:
             ui.prompt.insert('1.0', OBJECTIVE)
             ui.send_button.invoke()
             wait_for(root, ready_to_interrupt.is_set)
+            assert not (workspace / '__pycache__').exists(), 'Pi wrote bytecode beside a script input.'
             job = ui.jobs.current()
             assert job and job['payload']['message'] == OBJECTIVE
             saved_before = entries(job['session'])
@@ -176,9 +218,14 @@ def main():
             assert first.read_bytes() == FIRST['content'].encode()
             assert (workspace / SECOND['path']).read_bytes() == SECOND['content'].encode()
             assert any('Recovery refused to repeat write' in json.dumps(request) for request in requests)
+            assert any('This file belongs to a completed checkpoint' in json.dumps(request) for request in requests)
+            assert sealed.stat().st_mtime_ns == sealed_timestamp and sealed.read_bytes() == SEALED['content'].encode()
             assert Jobs(state).current() is None
             assert close_requested == [True]
-            assert proof['plan']['steps'][0]['status'] == 'completed'
+            assert [(item['id'], item['status']) for item in proof['plan']['steps']] == [
+                (step['id'], 'completed'), (sealed_step['id'], 'completed')]
+            assert [item['id'] for item in ui.plan_steps] == [step['id'], sealed_step['id']]
+            assert proof['plan']['steps'][1]['checkpointProof']['sha256'] == sha256(MANIFEST['content'].encode()).hexdigest()
             summary = next(index for index, request in enumerate(requests) if request['mode'] == 'summary')
             retained_modes = {request['mode'] for request in requests[summary + 1:] if any(
                 message.get('role') == 'tool' and TOOL_WITNESS in json.dumps(message.get('content'))
@@ -190,10 +237,13 @@ def main():
             print(json.dumps({'checked_at': datetime.now(timezone.utc).isoformat(), 'native_qwen_requests': 0,
                               'gui_reopened': True, 'pinned_rpc': True, 'original_user_messages': user_count,
                               'waited_for_previous_rpc': True, 'saved_plan_visible_on_restore': True,
+                              'script_import_left_no_bytecode_cache': True,
                               'compactions': sum(entry['type'] == 'compaction' for entry in all_entries),
                               'exact_tool_result_after_compaction_and_restart': True,
                               'first_resumed_read_used_the_saved_route': True,
                               'duplicate_write_refused': True, 'actual_files_match': True,
+                              'checkpointed_edit_refused': True,
+                              'omitted_completed_step_and_proof_retained': True,
                               'background_close_after_archiving': True,
                               'checkpoint_phase': proof['phase'], 'request_modes': [r['mode'] for r in requests]}, indent=2))
         finally:

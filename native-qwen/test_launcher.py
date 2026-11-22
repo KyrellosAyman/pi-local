@@ -17,7 +17,8 @@ class LauncherTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
-        self.config = json.loads(Path(__file__).with_name("server-config.json").read_text())
+        self.config = json.loads(Path(__file__).with_name("optimized.example.json").read_bytes())
+        self.config.pop("model_filename")
         for key in ("executable", "model", "projector", "template", "api_key_file"):
             path = self.directory / (key + ".fixture")
             path.write_text("test-only-secret" if key == "api_key_file" else "fixture")

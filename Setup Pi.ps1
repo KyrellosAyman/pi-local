@@ -3,7 +3,8 @@ param(
     [ValidateSet('optimized', 'standard')][string]$Profile = 'optimized',
     [string]$Python,
     [switch]$Download,
-    [switch]$OfflineDependencies
+    [switch]$OfflineDependencies,
+    [switch]$Audio
 )
 
 $ErrorActionPreference = 'Stop'
@@ -28,14 +29,23 @@ if ($LASTEXITCODE -ne 0) { throw 'Use Python 3.12.16 x64 or a later 3.12 securit
 if (-not $OfflineDependencies) {
     & $venvPython -I -m pip --isolated --disable-pip-version-check install --require-hashes --only-binary=:all: --index-url https://pypi.org/simple -r (Join-Path $PSScriptRoot 'requirements.txt')
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if ($Audio) {
+        & $venvPython -I -m pip --isolated --disable-pip-version-check install --require-hashes --only-binary=:all: --index-url https://pypi.org/simple -r (Join-Path $PSScriptRoot 'requirements-audio.txt')
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
     & npm ci --prefix $client --registry https://registry.npmjs.org --ignore-scripts --no-fund --no-audit
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 & $venvPython -B -c 'import markdown_it, mcp, psutil, win32com.client'
 if ($LASTEXITCODE -ne 0) { throw 'Required Python dependencies are missing.' }
+if ($Audio) {
+    & $venvPython -I -B -c "import numpy, onnxruntime, sys; sys.exit('CPU provider unavailable' if 'CPUExecutionProvider' not in onnxruntime.get_available_providers() else 0)"
+    if ($LASTEXITCODE -ne 0) { throw 'The Pi environment is missing working audio packages. Run setup with -Audio before using offline setup.' }
+}
 $cli = Join-Path $client 'node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js'
 if (-not (Test-Path -LiteralPath $cli)) { throw 'Install the pinned Node dependencies before offline setup.' }
 $setupArguments = @('--profile', $Profile)
 if ($Download) { $setupArguments += '--download' }
+if ($Audio) { $setupArguments += '--audio' }
 & $venvPython -B (Join-Path $PSScriptRoot 'scripts/prepare_assets.py') @setupArguments
 exit $LASTEXITCODE

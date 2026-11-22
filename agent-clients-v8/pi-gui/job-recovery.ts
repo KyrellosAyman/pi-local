@@ -19,7 +19,9 @@ type Job = { id: string; session: string; workspace: string; previous_user: stri
 	payload: { message: string; images?: unknown[] } };
 type Phase = "running" | "completed" | "stopped" | "failed" | "needs_review";
 type Status = "succeeded" | "error" | "applied" | "unapplied";
-type Step = { id: string; title: string; skillQuery: string; status: "pending" | "in_progress" | "completed" };
+type StageCheckpointProof = { sha256: string; verifiedAt: string };
+type Step = { id: string; title: string; skillQuery: string; status: "pending" | "in_progress" | "completed";
+	checkpoint?: string; checkpointProof?: StageCheckpointProof };
 type Plan = { steps: Step[]; reason?: string; awaitingSkill?: string; updatedAt?: string };
 type WideRequest = { context: 131072; reason: "threshold" | "overflow"; tokensBefore: number; discardedToolTokens: number };
 type Preimage = { digest: string; revision: string } | null;
@@ -28,7 +30,8 @@ type Call = { id: string; tool: string; input: string; anchor?: string;
 type Checkpoint = { id: string; session: string; workspace: string; phase: Phase; pending: Call[];
 	completed: (Call & { status: Status })[]; recovered: number; updated_at: string; plan?: Plan; next?: Step; note?: string;
 	wideRequested?: WideRequest };
-type Run = { job: Job; checkpoint: Checkpoint; resumed: boolean; guarded?: Checkpoint["completed"] };
+type Run = { job: Job; checkpoint: Checkpoint; resumed: boolean; guarded?: Checkpoint["completed"];
+	sealedPaths?: Set<string> };
 
 function samePreimage(before: Preimage, current: Preimage | undefined) {
 	return before === null ? current === null : current?.digest === before.digest && current.revision === before.revision;
@@ -162,7 +165,12 @@ function planFrom(value: unknown): Plan | undefined {
 	const plan = value as Plan | undefined;
 	if (!plan || !Array.isArray(plan.steps) || !plan.steps.every((step) => step && typeof step.id === "string" &&
 		typeof step.title === "string" && typeof step.skillQuery === "string" &&
-		["pending", "in_progress", "completed"].includes(step.status))) return;
+		["pending", "in_progress", "completed"].includes(step.status) &&
+		(step.checkpoint === undefined || typeof step.checkpoint === "string" && step.checkpoint.length > 0) &&
+		(step.status !== "completed" || !step.checkpoint || Boolean(step.checkpointProof)) &&
+		(step.checkpointProof === undefined || step.status === "completed" && Boolean(step.checkpoint) &&
+			isDigest(step.checkpointProof?.sha256) && typeof step.checkpointProof?.verifiedAt === "string" &&
+			Number.isFinite(Date.parse(step.checkpointProof.verifiedAt))))) return;
 	return { steps: plan.steps, reason: typeof plan.reason === "string" ? plan.reason : undefined,
 		awaitingSkill: typeof plan.awaitingSkill === "string" ? plan.awaitingSkill : undefined,
 		updatedAt: typeof plan.updatedAt === "string" ? plan.updatedAt : undefined };
@@ -178,7 +186,8 @@ function writePath(cwd: string, path: string) {
 	return resolve(cwd, path);
 }
 
-function fileImage(cwd: string, path: string): { root: string; image: Preimage } | undefined {
+function fileImage(cwd: string, path: string, includeBytes = false):
+	{ root: string; image: Preimage; bytes?: Buffer } | undefined {
 	try {
 		const workspace = resolve(cwd);
 		// Windows allows case-sensitive directories; a case-folded prefix is not proof of identity.
@@ -220,7 +229,8 @@ function fileImage(cwd: string, path: string): { root: string; image: Preimage }
 				const latest = lstatSync(file, { bigint: true });
 				if (revision(latest) !== revision(stat) ||
 					pathKey(realpathSync(file)) !== pathKey(file)) return;
-				return observed({ digest: sha256(bytes), revision: revision(stat) });
+				return { ...observed({ digest: sha256(bytes), revision: revision(stat) }),
+					...(includeBytes ? { bytes } : {}) };
 			} finally {
 				closeSync(fd);
 			}
@@ -228,6 +238,54 @@ function fileImage(cwd: string, path: string): { root: string; image: Preimage }
 	} catch {
 		// Unknown path or changing file is not evidence of an unapplied write.
 	}
+}
+
+function stageCheckpoint(cwd: string, name: string) {
+	const path = writePath(cwd, name);
+	const manifest = path ? fileImage(cwd, path, true) : undefined;
+	if (!path || !manifest?.image || !manifest.bytes) {
+		throw new Error("Write the declared checkpoint within this workspace before closing the stage: " + name);
+	}
+	let files: unknown;
+	try {
+		files = JSON.parse(manifest.bytes.toString("utf8").replace(/^\uFEFF/, ""))?.finished_files;
+	} catch {
+		throw new Error("Repair the checkpoint JSON before closing the stage: " + name);
+	}
+	if (!Array.isArray(files) || !files.length) {
+		throw new Error("List the checkpointed paths and SHA-256 values in finished_files before closing the stage.");
+	}
+	const seen = new Set([pathKey(path)]);
+	for (const file of files) {
+		const target = typeof file?.path === "string" ? writePath(cwd, file.path) : undefined;
+		if (!target || seen.has(pathKey(target)) || !isDigest(file?.sha256) ||
+			fileImage(cwd, target)?.image?.digest !== file.sha256) {
+			throw new Error("Checkpoint artifact could not be verified: " + JSON.stringify(file?.path));
+		}
+		seen.add(pathKey(target));
+	}
+	return { sha256: manifest.image.digest, paths: seen };
+}
+
+export function verifyStageCheckpoint(cwd: string, name: string): StageCheckpointProof {
+	return { sha256: stageCheckpoint(cwd, name).sha256, verifiedAt: new Date().toISOString() };
+}
+
+function completedCheckpointPaths(cwd: string, plan?: Plan) {
+	const paths = new Set<string>();
+	for (const step of plan?.steps ?? []) {
+		if (step.status !== "completed" || !step.checkpoint || !step.checkpointProof) continue;
+		try {
+			const current = stageCheckpoint(cwd, step.checkpoint);
+			if (current.sha256 !== step.checkpointProof.sha256) {
+				throw new Error("The checkpoint manifest differs from the saved verification receipt.");
+			}
+			for (const path of current.paths) paths.add(path);
+		} catch (error) {
+			throw new Error(`The verified checkpoint ${step.checkpoint} could not be read back. ` + (error as Error).message);
+		}
+	}
+	return paths;
 }
 
 function originalUser(job: Job, ctx: ExtensionContext) {
@@ -366,8 +424,12 @@ export function registerJobRecovery(pi: ExtensionAPI) {
 		if (active.checkpoint.phase !== "running") return blocked("Pi recovery requires review before running another tool.");
 		const args = event.input as Record<string, unknown>;
 		const input = inputHash(args);
-		const file = event.toolName === "write" && typeof args.path === "string" &&
-			typeof args.content === "string" ? writePath(active.job.workspace, args.path) : undefined;
+		const target = (event.toolName === "write" || event.toolName === "edit") && typeof args.path === "string"
+			? writePath(active.job.workspace, args.path) : undefined;
+		if (target && active.sealedPaths?.has(pathKey(target))) {
+			return blocked("This file belongs to a completed checkpoint. Write a new version or reopen its stage before editing it.");
+		}
+		const file = event.toolName === "write" && typeof args.content === "string" ? target : undefined;
 		const observation = file ? fileImage(active.job.workspace, file) : undefined;
 		const digest = file && typeof args.content === "string" ? sha256(args.content) : undefined;
 		const replay = active.guarded?.find((call) => {
@@ -375,8 +437,9 @@ export function registerJobRecovery(pi: ExtensionAPI) {
 			if (!call.write || !file || !digest) return call.input === input;
 			if (pathKey(call.write.path) !== pathKey(file) || call.write.digest !== digest) return false;
 			const current = observation?.root === call.write.root ? observation.image : undefined;
+			// A successful write may have been followed by an edit worth preserving.
 			return call.status === "unapplied" ? !samePreimage(call.write.before, current)
-				: call.status === "applied" || call.status === "error" || current?.digest === digest;
+				: call.status === "applied" || call.status === "error" || (current !== null && current !== undefined);
 		});
 		if (replay) return blocked(`Recovery refused to repeat ${event.toolName} (receipt ${replay.id}). Check the current result and continue with the next action.`);
 		if (active.checkpoint.pending.some((call) => call.id === event.toolCallId)) {
@@ -397,7 +460,11 @@ export function registerJobRecovery(pi: ExtensionAPI) {
 		try {
 			if (event.toolName === "update_plan" && !event.isError) {
 				const plan = planFrom(event.details);
-				if (plan) save(active, { plan });
+				if (plan) {
+					const sealedPaths = completedCheckpointPaths(active.job.workspace, plan);
+					save(active, { plan });
+					active.sealedPaths = sealedPaths;
+				}
 				return;
 			}
 			if (readOnly.has(event.toolName)) return;
@@ -430,6 +497,13 @@ export function registerJobRecovery(pi: ExtensionAPI) {
 		const answer = start >= 0 ? branch.slice(start + 1).findLast((entry) => entry.type === "message" &&
 			entry.message.role === "assistant") : undefined;
 		const reason = answer?.type === "message" && answer.message.role === "assistant" ? answer.message.stopReason : undefined;
+		if (reason === "stop") {
+			try {
+				completedCheckpointPaths(run.job.workspace, run.checkpoint.plan);
+			} catch (error) {
+				return save(run, { phase: "needs_review", note: (error as Error).message });
+			}
+		}
 		save(run, reason === "stop" ? { phase: "completed", note: undefined }
 			: { phase: "failed", note: "Pi settled without a final answer" + (reason ? ` (${reason}).` : ".") });
 	});
@@ -508,6 +582,13 @@ export function registerJobRecovery(pi: ExtensionAPI) {
 				const calls = pending.slice(0, 4).map((call) => `${call.tool} (${call.id})`).join(", ");
 				const note = "Review these interrupted calls before continuing: " + calls +
 					(pending.length > 4 ? ` and ${pending.length - 4} more.` : ".");
+				save(run, { phase: "needs_review", note, pending, completed, plan });
+				throw new Error(note);
+			}
+			try {
+				run.sealedPaths = completedCheckpointPaths(job.workspace, plan);
+			} catch (error) {
+				const note = "Pi paused recovery. " + (error as Error).message;
 				save(run, { phase: "needs_review", note, pending, completed, plan });
 				throw new Error(note);
 			}

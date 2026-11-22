@@ -20,6 +20,7 @@ class PostToolLatency:
         self.active_tools = {}
         self.turn = None
         self.stream = None
+        self.compaction = None
         self.pending = []
         self.origin = time.time_ns(), time.perf_counter_ns()
         with path.open('x', encoding='utf-8') as stream:
@@ -31,10 +32,22 @@ class PostToolLatency:
         if kind in ('agent_start', 'agent_settled', 'local_exit'):
             self.tool = None
             self.active_tools.clear()
-            self.turn = self.stream = None
+            self.turn = self.stream = self.compaction = None
         elif kind == 'turn_start':
             self.turn = received
             self.stream = None
+        elif kind == 'compaction_start':
+            self.compaction = received
+        elif kind == 'compaction_end' and self.compaction is not None:
+            if event.get('aborted'):
+                outcome = 'aborted'
+            elif event.get('errorMessage'):
+                outcome = 'failed'
+            else:
+                outcome = 'saved' if event.get('result') is not None else 'unsaved'
+            self.pending.append({'type': 'compaction_interval', 'start_ns': self.compaction,
+                                 'end_ns': received, 'outcome': outcome})
+            self.compaction = None
         elif kind == 'tool_execution_start' and event.get('toolCallId'):
             self.active_tools[event['toolCallId']] = received
         elif kind == 'tool_execution_end':

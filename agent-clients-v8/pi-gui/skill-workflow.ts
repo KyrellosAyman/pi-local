@@ -27,10 +27,16 @@ export function registerSkillWorkflow(pi) {
 	const bundle = process.env.PI_SKILL_BUNDLE;
 	const shared = JSON.parse(process.env.PI_SKILL_SHARED ?? "[]");
 	const roots = [[root, "Pi library"], [bundle, "Built-in"], ...shared.map((dir) => [dir, "Shared library"])];
+	const webResearch = process.env.PI_LOCAL_WEB_TOOLS === "1";
+	const missingStandardAction = webResearch
+		? "Call research_skill with the required standard in query, then save_skill."
+		: "The local library has no matching skill. Ask for a local skill for this standard.";
 	const builtin = new Set([...core, "general-task"]);
 	const boot = core.map((name) => readFileSync(join(bundle, name, "SKILL.md"), "utf8")).join("\n\n");
 	let prepared, active, searched, inspectedSkills, openedSources, queries, pages, recovered, requested, pendingSkill;
 	let requiredStandards, stage, planComplete, candidates, routed, manualUsed, drafts, sourceText, nextVerificationReceipt;
+	let retryRoutineSelection = false;
+	let deliveredSkills;
 	const references = () => standards(stage?.skillQuery ?? "");
 	const covers = (text, expected = references()) => {
 		const found = standards(text);
@@ -70,9 +76,17 @@ export function registerSkillWorkflow(pi) {
 				candidates.clear();
 			}
 		}
+		retryRoutineSelection = Boolean(next && next.id === stage?.id && next.skillQuery === stage.skillQuery &&
+			searched && !active && !pendingSkill && !requested && !references().length);
 		stage = next;
 		planComplete = !next;
-		return { steps, routing: stage && !active ? stage.skillQuery : undefined, reopened: reopened?.id };
+		const routing = stage && !active ? stage.skillQuery : undefined;
+		const nextSkillAction = !routing ? undefined : !searched ? "Call find_skills for the current stage: " + routing
+			: pendingSkill ? "Call use_skill for " + pendingSkill + "."
+			: references().length && !candidates.size ? missingStandardAction
+			: "Skill search is complete. Choose a relevant result and call use_skill." +
+				(references().length || requested ? "" : " Use general-task if none fits.");
+		return { steps, routing, nextSkillAction, reopened: reopened?.id };
 	}
 
 	function catalog() {
@@ -172,8 +186,9 @@ export function registerSkillWorkflow(pi) {
 			routed = new Map(savedSteps.filter((step) => step.status === "completed")
 				.map((step) => [step.id, step.skillQuery]));
 			manualUsed = false;
-			searched = recovered = false;
+			searched = recovered = retryRoutineSelection = false;
 			inspectedSkills = new Map();
+			deliveredSkills = new Set();
 			openedSources = new Set();
 			sourceText = new Map();
 			drafts = new Map();
@@ -187,7 +202,7 @@ export function registerSkillWorkflow(pi) {
 				: "Call prepare_prompt once if there is no saved brief. For tool work without a plan, call update_plan with one in-progress step and a skillQuery for each step. ") +
 			(recovery && active ? "The verified skill route is active. Continue from the saved step. "
 				: "If the current stage has no active skill, call find_skills, judge coverage, then call use_skill by itself before starting work. ") +
-			"For a missing skill, research it, save a draft, load it, and apply it. Before completing the plan, publish only the revision checked against source evidence and an actual successful tool result. " +
+			"For a missing skill, use available research tools or ask for a local skill, then load and apply the verified revision. Before completing the plan, publish only the revision checked against source evidence and an actual successful tool result. " +
 			"Advance the plan before working on a different stage. Different skill queries reopen routing automatically. When the plan is complete, report the result. Reopen the plan only if work remains. For a simple answer without tools, search for and load general-task. " +
 			(requested ? "The user explicitly selected skill " + requested + ". Search for and load it for the first applicable stage. " : "") +
 			"New and revised skills are saved under " + root + ". " +
@@ -230,22 +245,25 @@ export function registerSkillWorkflow(pi) {
 		}) : [];
 		const routing = automatic && !closing && (!stage || !active);
 		// The native server requires the sole eligible tool to be offered by itself.
-		const search = routing && stage && !active && !searched
-			? offered.find((tool) => tool.type === "function" && tool.function?.name === "find_skills") : undefined;
+		const nextTool = !searched ? "find_skills" : retryRoutineSelection ? "use_skill" : undefined;
+		const requiredRoute = routing && stage && nextTool
+			? offered.find((tool) => tool.type === "function" && tool.function?.name === nextTool) : undefined;
+		if (requiredRoute && nextTool === "use_skill") retryRoutineSelection = false;
 		const choices = routing ? offered.filter((tool) => tool.type === "function" &&
 			(tool.function?.name === "update_plan" || allowed.has(tool.function?.name))) : [];
 		const eligible = choices.length ? choices : offered;
-		const routeRequest = closing ?? (search ? { ...payload, tools: [search], tool_choice: "required" }
+		const routeRequest = closing ?? (requiredRoute ? { ...payload, tools: [requiredRoute], tool_choice: "required" }
 			: automatic && eligible.length < payload.tools.length ? { ...payload, tools: eligible } : undefined);
+		const workflowCalls = new Map(conversation.flatMap((message) => (message.tool_calls ?? [])
+			.filter((call) => stateReceipts.has(call.function?.name)).map((call) => [call.id, call.function.name])));
 		const retained = active && conversation.some((message) => message.role === "tool" &&
-			typeof message.content === "string" && message.content.includes("Skill revision " + active.hash));
+			workflowCalls.get(message.tool_call_id) === "use_skill" && typeof message.content === "string" &&
+			message.content.includes("Skill revision " + active.hash + "\n") && message.content.includes(active.body));
 		const lastState = conversation.findLast((message) => message.role === "tool" &&
-			typeof message.content === "string" && message.content.includes("<pi_skill_state>\n"));
+			workflowCalls.has(message.tool_call_id) && typeof message.content === "string" && message.content.includes("<pi_skill_state>\n"));
 		if (lastState?.content.includes(stateNote()) && (!active || retained)) return routeRequest;
-		const workflowIds = new Set(conversation.flatMap((message) => (message.tool_calls ?? [])
-			.filter((call) => stateReceipts.has(call.function?.name)).map((call) => call.id)));
 		const receiptIndex = conversation.findLastIndex((message) => message.role === "tool" &&
-			typeof message.content === "string" && workflowIds.has(message.tool_call_id));
+			typeof message.content === "string" && workflowCalls.has(message.tool_call_id));
 		// Restore state if compaction removed a receipt or the active skill text.
 		const messages = [leading, ...conversation];
 		const index = receiptIndex + 1;
@@ -319,7 +337,7 @@ export function registerSkillWorkflow(pi) {
 				.map(([{ name, description, source }]) => ({ name, description, source }));
 			for (const hit of hits) candidates.add(hit.name);
 			return result(JSON.stringify({ inspected: entries.size, matches: hits,
-				next: !hits.length && expected.length ? "Call research_skill with the standard in query, then save_skill."
+				next: !hits.length && expected.length ? missingStandardAction
 					: !active ? "Choose a relevant skill and call use_skill alone. Read its result before other work." : undefined,
 				routineFallback: expected.length ? undefined : "general-task" }),
 				"search", { query, matches: hits.map((x) => x.name) });
@@ -350,8 +368,10 @@ export function registerSkillWorkflow(pi) {
 			active = { name, body, hash, directories: item ? [realpathSync(item.baseDir), item.originalDirectory].filter(Boolean) : [] };
 			if (name === requested) manualUsed = true;
 			if (stage) routed.set(stage.id, stage.skillQuery);
+			const reference = deliveredSkills.has(hash) ? "Reusing the previously loaded instructions for this revision." : body;
+			deliveredSkills.add(hash);
 			return result("Active skill: " + name + "\nSkill revision " + hash +
-				"\nResource directories: " + active.directories.join(", ") + "\n" + body, "active",
+				"\nResource directories: " + active.directories.join(", ") + "\n" + reference, "active",
 				{ skill: name, source: draft ? "Current-chat draft" : item.source, path: item?.path, reason, skillDigest: hash, stageId: stage?.id });
 		});
 
@@ -371,7 +391,7 @@ export function registerSkillWorkflow(pi) {
 			throw new Error("No readable reference in the active skill directories.");
 		});
 
-	if (process.env.PI_LOCAL_WEB_TOOLS === "1") tool("research_skill", "Research skill", "After local skill search, retrieve public evidence. An explicit URL opens that public page. A query naming one RFC opens its official text directly. Follow next_offset when the needed rule is beyond the excerpt.",
+	if (webResearch) tool("research_skill", "Research skill", "After local skill search, retrieve public evidence. An explicit URL opens that public page. A query naming one RFC opens its official text directly. Follow next_offset when the needed rule is beyond the excerpt.",
 		Type.Object({ query: Type.Optional(string(180)), url: Type.Optional(string(2048)),
 			offset: Type.Optional(Type.Integer({ minimum: 0 })),
 			category: Type.Optional(Type.Union(["web", "repos", "social", "video"].map((value) => Type.Literal(value)))) }),

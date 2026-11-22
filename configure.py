@@ -1,7 +1,7 @@
 """Bind this checkout to locally supplied runtime assets without starting a server."""
 
 from argparse import ArgumentParser
-from hashlib import sha256
+from hashlib import file_digest, sha256
 import json
 import os
 from pathlib import Path
@@ -44,6 +44,37 @@ def write_json(path, value):
         temporary.unlink(missing_ok=True)
 
 
+def checked_media_bin(gui):
+    directory = gui / "runtime/audio/ffmpeg"
+    if not directory.is_dir():
+        return None
+    manifest = json.loads((gui / "media/runtime-pins.json").read_bytes())["ffmpeg"]
+    for name in ("ffmpeg.exe", "ffprobe.exe"):
+        path = directory / name
+        if not path.is_file():
+            return None
+        with path.open("rb") as stream:
+            if file_digest(stream, "sha256").hexdigest() != manifest[name]:
+                return None
+    return str(directory)
+
+
+def checked_workspace_bins(cache, tools):
+    directories = []
+    for name, asset in tools.items():
+        directory = cache / name
+        if not directory.exists():
+            continue
+        executable = directory / asset["member"]
+        if executable.is_symlink() or not executable.resolve().is_relative_to(cache.resolve()):
+            raise ValueError(f"Workspace tool path escapes the Pi cache: {executable.name}")
+        with executable.open("rb") as stream:
+            if file_digest(stream, "sha256").hexdigest() != asset["member_sha256"]:
+                raise ValueError(f"Workspace tool differs from the pinned binary: {executable.name}")
+        directories.append(str(executable.parent))
+    return directories
+
+
 def main():
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("--node", default=shutil.which("node"))
@@ -75,7 +106,15 @@ def main():
     key = secret_dir / "loopback.key"
     config = {**profile, "executable": str(engine), "vendor_directory": str(vendor), "model": str(model),
               "projector": str(projector), "template": str(template), "api_key_file": str(key)}
+    media_bin = checked_media_bin(GUI)
+    try:
+        assets = json.loads((NATIVE / "windows-assets.json").read_bytes())
+        workspace_bins = checked_workspace_bins(secret_dir / "assets", assets["workspace_tools"])
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
     path_entries = dict.fromkeys([str(node.parent), str(Path(sys.executable).parent),
+                                  *workspace_bins,
+                                  *([media_bin] if media_bin else []),
                                   *(entry for entry in os.environ.get("PATH", "").split(os.pathsep) if entry)])
     runtime = {"node": str(node), "python": sys.executable, "path_entries": list(path_entries),
                "native_config_sha256": sha256(encoded(config)).hexdigest()}

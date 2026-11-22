@@ -13,7 +13,7 @@ TERMINAL = {'completed', 'failed', 'stopped'}
 
 
 def atomic_json(path, data):
-    temporary = path.with_name(f'{path.name}.{uuid4().hex}.tmp')
+    temporary = path.with_name(f'.{uuid4().hex}.tmp')
     try:
         with temporary.open('x', encoding='utf-8') as stream:
             json.dump(data, stream, ensure_ascii=False)
@@ -33,10 +33,19 @@ def read_json(path):
         return None
 
 
+def session_file_path(path):
+    # Use the Windows filesystem namespace for I/O while keeping ordinary paths in the ledger and RPC.
+    if os.name != 'nt' or not path.is_absolute() or path.drive.startswith('\\\\?\\'):
+        return path
+    if path.drive.startswith('\\\\'):
+        return Path('\\\\?\\UNC\\' + str(path)[2:])
+    return Path('\\\\?\\' + str(path))
+
+
 def last_user(session, workspace):
     """Read committed records. An incomplete trailing write must not cause a replay."""
     try:
-        stream = session.open('rb')
+        stream = session_file_path(session).open('rb')
     except FileNotFoundError:
         return None
     with stream:
@@ -76,10 +85,11 @@ class Jobs:
         return job
 
     def session_path(self, value):
-        path = Path(value).resolve()
-        if not path.is_relative_to(self.sessions) or path.suffix != '.jsonl':
+        root = session_file_path(self.sessions)
+        path = session_file_path(Path(value).absolute()).resolve()
+        if not path.is_relative_to(root) or path.suffix != '.jsonl':
             raise ValueError('The Pi session is outside the GUI session store.')
-        return path
+        return self.sessions / path.relative_to(root)
 
     def admit(self, session, workspace, payload, thinking, process, *, allow_wide_context=False):
         if self.current() is not None:
