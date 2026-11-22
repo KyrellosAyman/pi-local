@@ -7,7 +7,7 @@ import { Type } from "typebox";
 import { registerSkillWorkflow } from "./skill-workflow.ts";
 import { explicitAudioReplyRequested, retainedAudioForStep } from "./audio-findings.ts";
 import { POWERSHELL_TIMEOUT_SECONDS, registerStallRecovery } from "./stall-recovery.ts";
-import { registerJobRecovery, verifyStageCheckpoint } from "./job-recovery.ts";
+import { boundDesktopJob, registerJobRecovery, requestedStageVerification, stageVerificationSnapshot, verifyStageCheckpoint } from "./job-recovery.ts";
 import { registerInitialPlanReview } from "./initial-plan-review.ts";
 
 const maxPlanSteps = 12;
@@ -17,7 +17,34 @@ const step = Type.Object({
 	skillQuery: Type.String({ minLength: 1, maxLength: 180, pattern: "\\S" }),
 	status: Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("completed")]),
 	checkpoint: Type.Optional(Type.String({ minLength: 1, description: "Workspace JSON path for a checkpoint the user requires at this stage. Before closing, write finished_files entries with path and sha256." })),
+	verifyWith: Type.Optional(Type.String({ minLength: 1, description: "Workspace verifier script required by this checkpoint. Call run_script directly with the exact script path and only the checkpoint path as its argument." })),
 });
+
+function plannedVerification(step, input) {
+	return step?.verifyWith && input?.path === step.verifyWith && Array.isArray(input.args) && input.args.length === 1 &&
+		input.args[0] === step.checkpoint;
+}
+
+function checkedCompletion(ctx, step) {
+	const job = boundDesktopJob(ctx);
+	if (!job) throw new Error("Required verification needs a bound Pi desktop job.");
+	const current = stageVerificationSnapshot(ctx.cwd, step.checkpoint, step.verifyWith);
+	const branch = ctx.sessionManager.getBranch();
+	const last = branch.findLastIndex((entry) => entry.type === "message" && entry.message.role === "assistant" &&
+		entry.message.content.some((item) => item.type === "toolCall" && item.name === "run_script" &&
+			plannedVerification(step, item.arguments)));
+	const call = last >= 0 ? branch[last].message.content.findLast((item) => item.type === "toolCall" &&
+		item.name === "run_script" && plannedVerification(step, item.arguments)) : undefined;
+	const result = call && branch.slice(last + 1).findLast((entry) => entry.type === "message" &&
+		entry.message.role === "toolResult" && entry.message.toolName === "run_script" && entry.message.toolCallId === call.id)?.message;
+	const proof = result?.details?.checkpointProof;
+	if (result?.isError !== false || result.details?.exitCode !== 0 || proof?.verification?.job !== job.id ||
+		proof.verification.step !== step.id || proof.verification.call !== call.id ||
+		proof.sha256 !== current.sha256 || proof.verification.snapshot !== current.snapshot) {
+		throw new Error(`Run ${step.verifyWith} directly with only ${step.checkpoint} as its argument. Pi needs a successful receipt for the current files.`);
+	}
+	return proof;
+}
 
 async function detachedPilotReceipt(script, args, workspace, call, deadline, signal) {
 	const local = process.env.PI_LOCAL_ANALYSIS_SCRIPT;
@@ -101,6 +128,9 @@ export default function agentTools(pi) {
 		if (ids.size !== steps.length || steps.filter((item) => item.status === "in_progress").length > 1) {
 			throw new Error("Use unique step IDs and at most one in-progress step.");
 		}
+		if (steps.some((item) => item.verifyWith && (!item.checkpoint || !/\.(?:py|m?js|cjs)$/i.test(item.verifyWith)))) {
+			throw new Error("Declare both a checkpoint path and a saved Python or Node.js verifier script.");
+		}
 		return ids;
 	}
 	function commitPlan(steps, reason, initialReview, ctx) {
@@ -108,6 +138,7 @@ export default function agentTools(pi) {
 		const updatedSteps = [...steps];
 		for (const [index, item] of previousSteps.entries()) {
 			if (item.status === "completed" && !proposedIds.has(item.id)) updatedSteps.splice(index, 0, item);
+			else if (item.verifyWith && !proposedIds.has(item.id)) throw new Error("Keep the required verification stage: " + item.id);
 		}
 		if (updatedSteps.length > maxPlanSteps) {
 			throw new Error(`Use at most ${maxPlanSteps} steps including saved completed steps.`);
@@ -122,15 +153,20 @@ export default function agentTools(pi) {
 				prior.title !== step.title || prior.skillQuery !== step.skillQuery) return false;
 			return retainedAudioForStep(ctx, step.title, prior.title);
 		});
-		const plan = workflow.setPlan(updatedSteps.map(({ id, title, skillQuery, status, checkpoint }) => {
+		const plan = workflow.setPlan(updatedSteps.map(({ id, title, skillQuery, status, checkpoint, verifyWith }) => {
 			const previous = previousSteps.find((item) => item.id === id);
 			if (checkpoint && previous?.checkpoint && checkpoint !== previous.checkpoint) {
 				throw new Error("Keep the declared checkpoint path for stage " + id + ": " + previous.checkpoint);
 			}
+			if (verifyWith && previous?.verifyWith && verifyWith !== previous.verifyWith) {
+				throw new Error("Keep the declared verification script for stage " + id + ": " + previous.verifyWith);
+			}
 			if (status === "completed" && previous?.status === "completed") return previous;
 			const path = previous?.checkpoint ?? checkpoint;
-			if (status === "completed" && path) verified.set(id, verifyStageCheckpoint(ctx.cwd, path));
-			return { id, title, skillQuery, status, ...(path ? { checkpoint: path } : {}) };
+			const verifier = previous?.verifyWith ?? verifyWith;
+			if (status === "completed" && path) verified.set(id, verifier
+				? checkedCompletion(ctx, { id, checkpoint: path, verifyWith: verifier }) : verifyStageCheckpoint(ctx.cwd, path));
+			return { id, title, skillQuery, status, ...(path ? { checkpoint: path } : {}), ...(verifier ? { verifyWith: verifier } : {}) };
 		}), measured, scopedAudio);
 		const note = plan.reopened ? "Pi kept " + plan.reopened + " in progress" +
 			(plan.routing ? " because it still needed a skill route." : " for final verification.") : "";
@@ -145,11 +181,15 @@ export default function agentTools(pi) {
 			updatedAt: new Date().toISOString(), ...(initialReview ? { initialReview } : {}) };
 		pi.appendEntry("gui-plan", details);
 		const receipts = previousSteps.filter((item) => item.status === "completed" && verified.has(item.id))
-			.map((item) => "Verified " + item.checkpoint + " at " + item.checkpointProof.verifiedAt + ".");
+			.map((item) => "Verified " + item.checkpoint + " at " + item.checkpointProof.verifiedAt +
+				(item.verifyWith ? " using " + item.verifyWith : "") + ".");
+		const checking = previousSteps.find((item) => item.status === "in_progress" && item.verifyWith);
+		const nextCheck = checking && `Before closing ${checking.id}, call run_script with path ${JSON.stringify(checking.verifyWith)} ` +
+			`and args ${JSON.stringify([checking.checkpoint])}. Then close the step with update_plan.`;
 		const finalFormat = previousSteps.every((item) => item.status === "completed") ?
 			"Follow the user's exact final answer format. If the user asked for one line, put only the requested answer on that line and omit process or verification notes." : "";
 		return reply([initialReview ? "Initial review complete. Reviewed plan recorded." : "Plan recorded.",
-			note, plan.nextSkillAction, ...receipts, finalFormat].filter(Boolean).join(" "), details);
+			note, plan.nextSkillAction, nextCheck, ...receipts, finalFormat].filter(Boolean).join(" "), details);
 	}
 	const draftInitialPlan = registerInitialPlanReview(pi, workflow.allowed, step, commitPlan);
 	pi.registerTool({
@@ -159,6 +199,16 @@ export default function agentTools(pi) {
 		parameters: Type.Object({ steps: Type.Array(step, { minItems: 1, maxItems: maxPlanSteps }), reason: Type.Optional(Type.String({ maxLength: 300 })) }),
 		async execute(_id, { steps, reason }, _signal, _onUpdate, ctx) {
 			if (!planned) {
+				const job = boundDesktopJob(ctx);
+				const required = job && requestedStageVerification(job.payload.message);
+				if (required) {
+					const matches = steps.filter((item) => item.checkpoint === required.checkpoint);
+					const [match] = matches;
+					if (matches.length !== 1 || match.verifyWith && match.verifyWith !== required.verifyWith) {
+						throw new Error(`Include one step with checkpoint ${required.checkpoint} and verifyWith ${required.verifyWith}.`);
+					}
+					steps = steps.map((item) => item === match ? { ...item, verifyWith: required.verifyWith } : item);
+				}
 				checkPlan(steps);
 				const draft = draftInitialPlan(steps);
 				if (draft) return reply("Initial plan recorded for review. Wait for the review before starting work.", draft);
@@ -181,6 +231,11 @@ export default function agentTools(pi) {
 				[".js", ".mjs", ".cjs"].includes(type) ? process.execPath : undefined;
 			if (!executable) throw new Error("Select a saved Node.js or Python script with a supported extension.");
 			if (!lstatSync(script).isFile()) throw new Error("Select an existing regular script file.");
+			const stage = previousSteps.find((item) => item.status === "in_progress");
+			const checking = plannedVerification(stage, { path, args });
+			const job = checking ? boundDesktopJob(ctx) : undefined;
+			if (checking && !job) throw new Error("Required verification needs a bound Pi desktop job.");
+			const before = checking ? stageVerificationSnapshot(ctx.cwd, stage.checkpoint, stage.verifyWith) : undefined;
 			const env = { ...process.env, PYTHONIOENCODING: "utf-8" };
 			delete env.PI_T03_API_KEY;
 			const deadline = Date.now() + timeout * 1000;
@@ -207,7 +262,22 @@ export default function agentTools(pi) {
 						fail(new Error([status, output].filter(Boolean).join("\n")));
 						return;
 					}
-					done(reply(output || "Script exited with code 0.", { path: script, exitCode: 0 }));
+					let checkpointProof;
+					if (before) {
+						try {
+							const after = stageVerificationSnapshot(ctx.cwd, stage.checkpoint, stage.verifyWith);
+							if (signal?.aborted || boundDesktopJob(ctx)?.id !== job.id || !previousSteps.includes(stage) ||
+								before.snapshot !== after.snapshot) throw new Error("The job, stage or files changed during verification. Run the check again.");
+							checkpointProof = { sha256: after.sha256, verifiedAt: new Date().toISOString(),
+								verification: { job: job.id, step: stage.id, call: _id, snapshot: after.snapshot } };
+						} catch (verificationError) {
+							fail(verificationError);
+							return;
+						}
+					}
+					const text = output || "Script exited with code 0.";
+					done(reply(checkpointProof ? text + "\nPi recorded verification for " + stage.checkpoint + "." : text,
+						{ path: script, exitCode: 0, ...(checkpointProof ? { checkpointProof } : {}) }));
 				});
 			});
 		},

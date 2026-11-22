@@ -3,7 +3,7 @@
 
 **KyrellosAyman**
 
-Technical report • Version 0.1.7 • 22 November 2026
+Technical report • Version 0.1.8 • 23 November 2026
 
 ### Abstract
 
@@ -143,6 +143,12 @@ In a live file-copy test, the reviewer converted one broad step into reading and
 
 A subsequent matched browser test exposed two retries when the reviewer described already satisfied checks as requested fixes. The reviewer can now commit the complete saved draft without rewriting its steps. Revision still retains declared checkpoint paths and requires changed steps when a correction is claimed. The matched workflow committed once with zero retries. Draft-to-accept time fell from 64.336 to 13.065 seconds and full time from 306.540 to 159.128 seconds in this pair. Recovery tests exercised both accepting and revising the draft.
 
+### 5.5 Evidence required to close a planned step
+
+A source review of AlphaCode identified quality gates and claim checks as ideas to evaluate in Pi. We used Pi's existing plan, file hashes and session ledger. A direct verifier call with the planned checkpoint as its sole argument can close a step after a zero exit code and a receipt bound to the job, step, call and current revision of the script, manifest and every listed file. Pi holds the job for review when the requested check is missing. [11]
+
+In the first visible desktop attempt, the model kept the checkpoint but omitted the required script from the plan. Three successful script exits produced no bound receipt. A second attempt retained the script but exposed a duplicate first-plan call that committed before review. The third attempt used the same prompt and file bytes. It preserved one reviewed plan, returned the exact two-line result and completed with a bound receipt in 204.266 seconds. The scripted desktop tests rejected missing, unrelated, failed and stale proofs, held premature final answers for review, and retained the passing receipt through a controlled RPC restart. These tests cover executable checks on a fixed snapshot. Their conclusions depend on what the script actually asserts. [11]
+
 ## 6. Standalone, audio, and video findings
 
 The regular desktop initiated and used the native model in an isolated profile while the legacy applications were closed. The cold-start test took 54.88 seconds from GUI launch to verified settlement. A later test unloaded the idle model and started a new native process on the next prompt in the same chat, preserving the chat byte prefix and exact outputs. Five MCP registrations, a local checksum tool discovery and invocation, and a scoped Windows Calculator calculation passed. Detached history retained 2,990 messages and returned an exact 8,933-character sample across five pages. The public repository excludes the archive itself. In a signed-in Chrome tab, a normal Pi chat verified one approved control using its own catalog and filtered reader. The run made no page action and returned only the requested control from the browser tool. The routing change removed a redundant skill search and a discovery call in the matched retake. Production OAuth, broader integrations and retirement checks remain open.
@@ -214,3 +220,5 @@ Pi has demonstrated a standalone local model lifecycle, exact elapsed archive re
 [9] KyrellosAyman. 2026. [v0.1.6 MCP OAuth scope results](https://github.com/KyrellosAyman/pi-local/blob/v0.1.6/research/evidence/2026-11-22-mcp-oauth.md).
 
 [10] KyrellosAyman. 2026. [v0.1.7 local listening and timing results](https://github.com/KyrellosAyman/pi-local/blob/v0.1.7/research/evidence/2026-11-22-listening.md).
+
+[11] Dragonked2 and contributors. 2026. [AlphaCode v1.1.19 source](https://github.com/dragonked2/alphacode/tree/3d240a9417454de91911ee2da723a94aa1782cb9). KyrellosAyman. 2026. [v0.1.8 desktop verification results and fixture](https://github.com/KyrellosAyman/pi-local/blob/v0.1.8/research/evidence/2026-11-23-verification.md).

@@ -1394,6 +1394,10 @@ class App:
         for index, step in enumerate(self.plan_steps, 1):
             state = 'pending' if reviewing else step['status']
             self._write(self.plan, f"{symbols.get(state, '○')}  {index}. {step['title']}\n", state)
+            if step.get('verifyWith'):
+                verified = state == 'completed' and step.get('checkpointProof', {}).get('verification')
+                label = 'Verifier passed' if verified else 'Verification required'
+                self._write(self.plan, f"    {label} · {step['checkpoint']}\n", state)
         if self.plan_reason:
             self._write(self.plan, '\n' + self.plan_reason + '\n', 'reason')
 

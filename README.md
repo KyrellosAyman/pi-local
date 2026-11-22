@@ -2,7 +2,7 @@
 
 Pi Local is a Windows desktop harness for local model inference, tool use, and resumable jobs. Pi starts its own model service. The default release uses authenticated loopback, local workspace tools, and a checkout-specific state directory. It needs no API account or API key from the user.
 
-[Research paper, v0.1.7](research/pi-local-v0.1.7.pdf) · [Reproduction guide](docs/reproducibility.md) · [Evaluation ledger](research/evidence/2026-11-22-listening.md) · [Releases](https://github.com/KyrellosAyman/pi-local/releases)
+[Research paper, v0.1.8](research/pi-local-v0.1.8.pdf) · [Reproduction guide](docs/reproducibility.md) · [Evaluation ledger](research/evidence/2026-11-23-verification.md) · [Releases](https://github.com/KyrellosAyman/pi-local/releases)
 
 ## Install on Windows
 
@@ -22,6 +22,8 @@ The measured GPU was an RTX 5060 Ti with 16 GB VRAM and 63.8 GiB host RAM. Use a
 In Pi, choose a workspace and send a short prompt. By default this release keeps chats, recoverable jobs and its starter workspace under the ignored `.local/` directory. The settings panel can unload an idle model. Use launcher status and stop commands from the reproduction guide when checking ownership.
 
 When a missing choice materially affects the request, Pi shows three clickable answers, with its recommendation first, and a fourth row for a custom answer. Before starting planned tool work, Pi reviews the initial draft for coverage and adds missing implementation or verification steps.
+
+For checks that must run before a desktop plan step can close, specify a workspace checkpoint and a verifier script. Pi records a passing direct call against the exact files and shows the result in the plan. [Run the verification fixture](docs/reproducibility.md#verify-checkpoints-and-script-receipts)
 
 For local listening reports, install with `-Audio`. Use **Audio report** to inspect one recording, or ask in Pi chat for listening findings on named recordings in your workspace. [Audio setup and checks](docs/reproducibility.md#verify-local-listening)
 

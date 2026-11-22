@@ -42,6 +42,9 @@ Run these from the repository root after installing the desktop dependencies.
 & .\.venv\Scripts\python.exe -B .\agent-clients-v8\pi-gui\verify_prompt_clarification.py
 & .\.venv\Scripts\python.exe -B .\agent-clients-v8\pi-gui\verify_initial_plan_review.py
 & .\.venv\Scripts\python.exe -B .\agent-clients-v8\pi-gui\verify_initial_plan_review.py --accept
+& .\.venv\Scripts\python.exe -B .\agent-clients-v8\pi-gui\verify_stage_receipts.py
+& .\.venv\Scripts\python.exe -B .\agent-clients-v8\pi-gui\verify_stage_receipts.py --early-stop
+& .\.venv\Scripts\python.exe -B .\agent-clients-v8\pi-gui\verify_stage_receipts.py --no-plan
 node .\agent-clients-v8\pi-gui\verify-near64-answer-room.mjs
 node .\agent-clients-v8\pi-gui\verify_stall_recovery.mjs
 node .\agent-clients-v8\pi-gui\verify_skill_availability.mjs
@@ -52,11 +55,17 @@ node .\agent-clients-v8\pi-gui\verify-checkpoint-protection.mjs
 
 The launcher suite reads the tracked profile example and uses temporary fixture files. It runs before asset download or model configuration. The GUI fixtures use Tk and a separate mock loopback port. They cover profile defaults, exact tool writes, stream and rendering state, and process restart. The Python script runner suppresses import bytecode caches. The restart fixture checks that an imported input produces no cache file. The recorded archive check reproduces exact input hashes and sequential line-range coverage from the released summary.
 
-For a stage that declares a checkpoint, keep the completed outputs listed under `finished_files` in its checkpoint JSON, with `path` and `sha256` on each entry. Pi refuses direct writes and edits to those paths while their owning stage remains completed. It checks the saved digests on resume and settlement. Write a separate revision or explicitly reopen the step for a planned change.
-
 The clarification fixture drives actual Tk buttons and the fourth-row text field, with interruptions before an answer and after saving it. The review fixture starts with a broad draft that lacks a read and a comparison, then checks that the reviewer runs before work and that later plan updates skip it. The near-context fixture tests the loopback tokenizer call, output allowance, and smaller direct tool catalog without starting a model.
 
 The desktop checks exercise the **Shared model speed** meter during idle, active and unavailable service states. The two first-plan fixtures check that **Reviewing the initial plan** appears while a draft is pending and clears before work proceeds, including recovery on both sides of the review.
+
+### Verify checkpoints and script receipts
+
+For a stage that declares a checkpoint, keep the completed outputs listed under `finished_files` in its checkpoint JSON, with `path` and `sha256` on each entry. Pi refuses direct writes and edits to those paths while their owning stage remains completed. It checks the saved digests on resume and settlement. Write a separate revision or explicitly reopen the step for a planned change.
+
+For a desktop step that needs an executable check, put the checkpoint path and `verifyWith` script path in the reviewed plan. You can also tell Pi, “In the Pi plan, require the checkpoint proof.json and the verifier script verify.py.” Pi binds that explicitly named pair before plan review and keeps the job open for review if the plan or check is missing. Keep the script inside the workspace and pass the exact checkpoint path as its sole argument in a direct `run_script` call. The script should exit nonzero if its check fails and leave the checkpoint and its files unchanged. Pi binds a successful run to the current job and file revisions, and shows the verification status in the plan. A script run establishes the checks that script performed. Review its assertions against the intended result.
+
+The `verify_stage_receipts.py` fixture submits two first-plan calls in one model response, tests rejected and passing checks, and restarts the pinned RPC before completing the verified step. The `--early-stop` and `--no-plan` cases test a final answer before the planned verifier runs and before the model proposes a plan, respectively.
 
 ### Compare short and near-limit decode
 

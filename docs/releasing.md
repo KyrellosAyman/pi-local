@@ -12,6 +12,7 @@
 | 0.1.5 | Show the active plan-review phase, correct the shared speed meter, and report the long-context slowdown | [Research release](https://github.com/KyrellosAyman/pi-local/releases/tag/v0.1.5) |
 | 0.1.6 | Enforce configured MCP OAuth scopes and verify sign-in and refresh through the bundled launcher | [Research release](https://github.com/KyrellosAyman/pi-local/releases/tag/v0.1.6) |
 | 0.1.7 | Ground Pi chat listening reports in decoded audio, retain separate channel estimates, and verify timing recovery on frozen replays | [Research release](https://github.com/KyrellosAyman/pi-local/releases/tag/v0.1.7) |
+| 0.1.8 | Bind completion to a required script and current file revisions, preserve first-plan review under duplicate calls, and recover verified outcomes after RPC restart | [Research release](https://github.com/KyrellosAyman/pi-local/releases/tag/v0.1.8) |
 
 ## Update the record and publish
 
