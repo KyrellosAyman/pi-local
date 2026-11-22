@@ -5,9 +5,10 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { inspect } from "./analysis-tools.ts";
+import { clarificationEnabled, collectClarification, questionsType } from "./prompt-clarification.ts";
 
 const core = ["prompt-engineer", "skill-creation"];
-const stateReceipts = new Set(["prepare_prompt", "update_plan", "find_skills", "use_skill", "save_skill", "publish_skill"]);
+const stateReceipts = new Set(["prepare_prompt", "update_plan", "review_initial_plan", "find_skills", "use_skill", "save_skill", "publish_skill"]);
 const slug = "^[a-z0-9]+(?:-[a-z0-9]+)*$";
 const nameField = Type.String({ pattern: slug, maxLength: 64 });
 const string = (maxLength) => Type.String({ minLength: 1, maxLength });
@@ -38,6 +39,10 @@ export function registerSkillWorkflow(pi) {
 	let retryRoutineSelection = false;
 	let deliveredSkills;
 	const references = () => standards(stage?.skillQuery ?? "");
+	const recordBrief = (brief) => {
+		prepared = brief;
+		requiredStandards = [...new Set([...requiredStandards, ...(brief.answers ?? []).flatMap(({ answer }) => standards(answer))])];
+	};
 	const covers = (text, expected = references()) => {
 		const found = standards(text);
 		return expected.every((reference) => found.includes(reference));
@@ -140,7 +145,9 @@ export function registerSkillWorkflow(pi) {
 		const brief = history.findLast((entry) => entry.customType === "gui-skill" && entry.data?.skillEvent === "brief")?.data;
 		if (typeof brief?.brief !== "string" || !brief.brief || !Array.isArray(brief.checks) ||
 			!brief.checks.every((check) => typeof check === "string")) return;
-		prepared = { brief: brief.brief, checks: brief.checks };
+		const answers = Array.isArray(brief.answers) && brief.answers.every((item) =>
+			typeof item?.question === "string" && typeof item?.answer === "string") ? brief.answers : undefined;
+		recordBrief({ brief: brief.brief, checks: brief.checks, ...(answers ? { answers } : {}) });
 		stage = plan?.steps?.find((step) => step.status === "in_progress");
 		const selected = history.findLastIndex((entry) => entry.customType === "gui-skill" && entry.data?.skillEvent === "active");
 		if (selected < 0) return;
@@ -171,7 +178,7 @@ export function registerSkillWorkflow(pi) {
 		if (stage) routed.set(stage.id, stage.skillQuery);
 	}
 
-	pi.on("before_agent_start", (event, context) => {
+	pi.on("before_agent_start", async (event, context) => {
 		const recovery = event.messageType === "custom" && event.message.customType === "local-pi-job-recovery"
 			? event.message.details : undefined;
 		if (event.messageType === "user" || recovery) {
@@ -194,7 +201,16 @@ export function registerSkillWorkflow(pi) {
 			drafts = new Map();
 			nextVerificationReceipt = 1;
 			queries = pages = 0;
-			if (recovery) restoreRoute(context, recovery.plan);
+			if (recovery) {
+				restoreRoute(context, recovery.plan);
+				if (!prepared) {
+					const clarified = await collectClarification(context, context.signal);
+					if (clarified) {
+						recordBrief(clarified);
+						result("Prepared brief restored with the saved clarification.", "brief", prepared);
+					}
+				}
+			}
 		}
 		return { systemPrompt: event.systemPrompt +
 			"\n\nApply these two built-in skills on every Pi task. " + (recovery && prepared
@@ -228,6 +244,19 @@ export function registerSkillWorkflow(pi) {
 		if (!Array.isArray(payload?.messages)) return;
 		const [leading, ...conversation] = payload.messages;
 		if (!["developer", "system"].includes(leading?.role) || typeof leading.content !== "string") return;
+		let withAnswers;
+		if (prepared?.answers?.length) {
+			const index = conversation.findLastIndex((message) => message.role === "user");
+			const user = conversation[index];
+			if (typeof user?.content === "string" || Array.isArray(user?.content)) {
+				// These are committed user input. Keep the original transcript intact while continuing the request.
+				const note = "\n\nI have already answered Pi's clarification. Use my answers to complete the original request now.\n" +
+					JSON.stringify(prepared.answers);
+				conversation[index] = { ...user, content: typeof user.content === "string" ? user.content + note :
+					[...user.content, { type: "text", text: note }] };
+				payload = withAnswers = { ...payload, messages: [leading, ...conversation] };
+			}
+		}
 		const automatic = [undefined, "auto"].includes(payload.tool_choice) && Array.isArray(payload.tools);
 		const closing = planComplete && automatic ? { ...payload, tools: payload.tools.filter((tool) =>
 			tool.type === "function" && tool.function?.name === "update_plan") } : undefined;
@@ -261,7 +290,7 @@ export function registerSkillWorkflow(pi) {
 			message.content.includes("Skill revision " + active.hash + "\n") && message.content.includes(active.body));
 		const lastState = conversation.findLast((message) => message.role === "tool" &&
 			workflowCalls.has(message.tool_call_id) && typeof message.content === "string" && message.content.includes("<pi_skill_state>\n"));
-		if (lastState?.content.includes(stateNote()) && (!active || retained)) return routeRequest;
+		if (lastState?.content.includes(stateNote()) && (!active || retained)) return routeRequest ?? withAnswers;
 		const receiptIndex = conversation.findLastIndex((message) => message.role === "tool" &&
 			typeof message.content === "string" && workflowCalls.has(message.tool_call_id));
 		// Restore state if compaction removed a receipt or the active skill text.
@@ -312,13 +341,17 @@ export function registerSkillWorkflow(pi) {
 			structuredContent: event.structuredContent };
 	});
 
-	tool("prepare_prompt", "Prepare prompt", "Record a clear brief and relevant acceptance checks. Preserve the user's wording when they ask for exact text or a simple answer.",
-		Type.Object({ brief: string(3600), checks: Type.Optional(Type.Array(string(300), { maxItems: 8 })) }),
-		async (_id, { brief, checks = [] }) => {
+	tool("prepare_prompt", "Prepare prompt", "Record a clear brief and relevant acceptance checks. Preserve the user's wording when they ask for exact text or a simple answer." +
+		(clarificationEnabled ? " If an ambiguity materially changes the deliverable, audience, or constraint, ask one brief question, or two only if both matter. Give exactly three distinct choices with the recommended choice first. Leave clear prompts and requests to proceed without questions alone." : ""),
+		Type.Object({ brief: string(3600), checks: Type.Optional(Type.Array(string(300), { maxItems: 8 })),
+			...(clarificationEnabled ? { questions: Type.Optional(questionsType) } : {}) }),
+		async (_id, { brief, checks = [], questions = [] }, signal, _update, context) => {
 			if (prepared) return result("Use the existing brief.\n" + JSON.stringify(prepared));
 			if (!brief.trim()) throw new Error("The brief is empty.");
-			prepared = { brief: brief.trim(), checks };
-			return result("Prepared brief recorded. Plan tool work, or search the skill library for a simple answer.", "brief", prepared);
+			const clarified = questions.length ? await collectClarification(context, signal, { brief: brief.trim(), checks, questions }) : undefined;
+			recordBrief(clarified ?? { brief: brief.trim(), checks });
+			const next = clarified ? "The user has answered the displayed questions. Continue with their saved answers." : "Prepared brief recorded.";
+			return result(next + " Plan tool work, or search the skill library for a simple answer.", "brief", prepared);
 		});
 
 	tool("find_skills", "Find skills", "Search installed skill names and descriptions before looking online. Search for a skill by its name or task terms.",

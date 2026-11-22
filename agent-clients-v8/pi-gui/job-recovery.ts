@@ -10,7 +10,7 @@ const customType = "local-pi-job-recovery";
 const jobId = /^[a-f0-9]{32}$/;
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const readOnly = new Set(["read", "grep", "find", "ls", "inspect_input", "view_image_file", "sample_video",
-	"analyze_audio", "read_document", "read_website", "list_recent_pngs", "prepare_prompt", "update_plan",
+	"analyze_audio", "read_document", "read_website", "list_recent_pngs", "prepare_prompt", "update_plan", "review_initial_plan",
 	"find_skills", "use_skill", "read_skill_reference", "research_skill", "save_skill", "get_chrome_state",
 	"list_windows", "get_window_state", "mcp__windows__get_chrome_state", "mcp__chrome__get_chrome_state",
 	"mcp__windows__list_windows", "mcp__windows__get_window_state"]);
@@ -22,7 +22,8 @@ type Status = "succeeded" | "error" | "applied" | "unapplied";
 type StageCheckpointProof = { sha256: string; verifiedAt: string };
 type Step = { id: string; title: string; skillQuery: string; status: "pending" | "in_progress" | "completed";
 	checkpoint?: string; checkpointProof?: StageCheckpointProof };
-type Plan = { steps: Step[]; reason?: string; awaitingSkill?: string; updatedAt?: string };
+type Plan = { steps: Step[]; reason?: string; awaitingSkill?: string; updatedAt?: string;
+	initialReview?: { job: string; findings: string[] } };
 type WideRequest = { context: 131072; reason: "threshold" | "overflow"; tokensBefore: number; discardedToolTokens: number };
 type Preimage = { digest: string; revision: string } | null;
 type Call = { id: string; tool: string; input: string; anchor?: string;
@@ -173,7 +174,10 @@ function planFrom(value: unknown): Plan | undefined {
 			Number.isFinite(Date.parse(step.checkpointProof.verifiedAt))))) return;
 	return { steps: plan.steps, reason: typeof plan.reason === "string" ? plan.reason : undefined,
 		awaitingSkill: typeof plan.awaitingSkill === "string" ? plan.awaitingSkill : undefined,
-		updatedAt: typeof plan.updatedAt === "string" ? plan.updatedAt : undefined };
+		updatedAt: typeof plan.updatedAt === "string" ? plan.updatedAt : undefined,
+		initialReview: typeof plan.initialReview?.job === "string" && jobId.test(plan.initialReview.job) &&
+			Array.isArray(plan.initialReview.findings) && plan.initialReview.findings.every((item) => typeof item === "string") ?
+			plan.initialReview : undefined };
 }
 
 function writePath(cwd: string, path: string) {
@@ -302,6 +306,20 @@ function lastUserId(ctx: ExtensionContext) {
 	return ctx.sessionManager.getBranch().findLast((entry) => entry.type === "message" && entry.message.role === "user")?.id ?? null;
 }
 
+export function boundDesktopJob(ctx: ExtensionContext, directory = process.env.PI_GUI_RECOVERY_DIR): Job | undefined {
+	if (ctx.mode !== "rpc" || !directory || !isAbsolute(directory)) return;
+	const value = readJson(join(directory, "active-job.json")) as Job | undefined;
+	const session = ctx.sessionManager.getSessionFile();
+	if (!value || !session || typeof value.session !== "string" || !isAbsolute(value.session) ||
+		!value.session.toLowerCase().endsWith(".jsonl") || pathKey(value.session) !== pathKey(session)) return;
+	if (typeof value.id !== "string" || !jobId.test(value.id) || typeof value.workspace !== "string" ||
+		!isAbsolute(value.workspace) || pathKey(ctx.cwd) !== pathKey(value.workspace) ||
+		typeof value.payload?.message !== "string" || !(value.previous_user === null || typeof value.previous_user === "string")) {
+		throw new Error("Pi recovery job is not bound to this workspace and session.");
+	}
+	return value;
+}
+
 export function registerJobRecovery(pi: ExtensionAPI) {
 	const directory = process.env.PI_GUI_RECOVERY_DIR;
 	if (!directory || !isAbsolute(directory)) return;
@@ -310,19 +328,7 @@ export function registerJobRecovery(pi: ExtensionAPI) {
 	let queued: Run | undefined;
 	let fault: string | undefined;
 
-	function boundJob(ctx: ExtensionContext): Job | undefined {
-		if (ctx.mode !== "rpc") return;
-		const value = readJson(join(directory!, "active-job.json")) as Job | undefined;
-		const session = ctx.sessionManager.getSessionFile();
-		if (!value || !session || typeof value.session !== "string" || !isAbsolute(value.session) ||
-			!value.session.toLowerCase().endsWith(".jsonl") || pathKey(value.session) !== pathKey(session)) return;
-		if (typeof value.id !== "string" || !jobId.test(value.id) || typeof value.workspace !== "string" ||
-			!isAbsolute(value.workspace) || pathKey(ctx.cwd) !== pathKey(value.workspace) ||
-			typeof value.payload?.message !== "string" || !(value.previous_user === null || typeof value.previous_user === "string")) {
-			throw new Error("Pi recovery job is not bound to this workspace and session.");
-		}
-		return value;
-	}
+	const boundJob = (ctx: ExtensionContext) => boundDesktopJob(ctx, directory);
 
 	function load(job: Job): Checkpoint {
 		const value = readJson(join(directory!, job.id + ".json")) as Checkpoint | undefined;
@@ -458,7 +464,8 @@ export function registerJobRecovery(pi: ExtensionAPI) {
 	pi.on("tool_result", (event, ctx) => {
 		if (!active) return;
 		try {
-			if (event.toolName === "update_plan" && !event.isError) {
+			if (["update_plan", "review_initial_plan"].includes(event.toolName) && !event.isError) {
+				if ((event.details as { reviewPending?: boolean })?.reviewPending) return;
 				const plan = planFrom(event.details);
 				if (plan) {
 					const sealedPaths = completedCheckpointPaths(active.job.workspace, plan);

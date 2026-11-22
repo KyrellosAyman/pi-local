@@ -24,6 +24,7 @@ import pi_backend as backend
 from job_recovery import Jobs, TERMINAL
 from inspect_input import AV_EXT, IMAGE_EXT, audio_excerpt, picture
 from runtime_metrics import Metrics, PostToolLatency
+from prompt_clarification import ClarificationCard, PREFIX as CLARIFICATION_PREFIX, has_saved_clarification, save_answer, save_request
 import context_switch
 
 ASSETS = Path(__file__).resolve().parent
@@ -63,7 +64,8 @@ SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 LIVE_MARKDOWN_LIMIT = 4096
 TOOL_LABELS = {'powershell': 'PowerShell command', 'bash': 'Shell command', 'read': 'Read file',
                'write': 'Write file', 'edit': 'Edit file', 'grep': 'Search files', 'find': 'Find files',
-               'update_plan': 'Update plan', 'find_skills': 'Search skills', 'use_skill': 'Load skill',
+               'update_plan': 'Update plan', 'review_initial_plan': 'Review initial plan',
+               'find_skills': 'Search skills', 'use_skill': 'Load skill',
                'save_skill': 'Draft skill', 'publish_skill': 'Publish checked skill', 'prepare_prompt': 'Prepare brief',
                'run_script': 'Run script'}
 BODY = ('Segoe UI', 11)
@@ -132,6 +134,7 @@ class App:
         self.rpc = None
         self.rpc_marker = None
         self.pending = None
+        self.clarification = None
         self.pending_prompt = None
         self.active = bool(watch and watch.active())
         self.clock = (watch.started
@@ -225,6 +228,13 @@ class App:
                         padding=(5, 4), font=SMALL)
         style.map('Pi.TRadiobutton', background=[('active', selected)], foreground=[('disabled', disabled)],
                   indicatorbackground=[('selected', accent)], indicatorforeground=[('selected', on_accent)])
+        style.configure('Clarification.TFrame', background=panel, bordercolor=line, relief='solid', borderwidth=1)
+        style.configure('Clarification.TLabel', background=panel, foreground=text, font=SMALL)
+        style.configure('Clarification.TEntry', fieldbackground=bg, foreground=text, bordercolor=line,
+                        lightcolor=line, darkcolor=line, insertcolor=text, padding=(7, 5))
+        style.configure('ClarificationChoice.TButton', background=field, foreground=text, bordercolor=line,
+                        lightcolor=field, darkcolor=field, focuscolor=accent, anchor='w', padding=(8, 5), font=SMALL)
+        style.map('ClarificationChoice.TButton', background=[('active', selected)])
         style.configure('Pi.TCheckbutton', background=panel, foreground=text, indicatorbackground=field,
                         indicatorforeground=accent, focuscolor=accent, padding=(5, 4), font=SMALL)
         style.map('Pi.TCheckbutton', background=[('active', selected)],
@@ -624,7 +634,9 @@ class App:
             with (self.evidence / 'events.jsonl').open('a', encoding='utf-8') as stream:
                 stream.write(json.dumps(event) + '\n')
         kind = e.get('type')
-        if kind == 'local_metrics':
+        if kind == 'extension_ui_request' and str(e.get('title', '')).startswith(CLARIFICATION_PREFIX):
+            self._show_clarification(e)
+        elif kind == 'local_metrics':
             self._runtime(e['data'])
             if self.latency and self.active and 'sampled_ns' in e:
                 self.latency.sample(e['sampled_ns'], e['data'])
@@ -730,10 +742,16 @@ class App:
                                                    message, bool(message.get('isError')))
                             if not message.get('isError'):
                                 details = message.get('details') or {}
-                                if message.get('toolName') == 'update_plan':
+                                if message.get('toolName') in ('update_plan', 'review_initial_plan'):
                                     self._apply_plan(details)
                                 elif details.get('skillEvent'):
                                     self._apply_skill(details)
+                                    answers = details.get('answers')
+                                    if details['skillEvent'] == 'brief' and isinstance(answers, list):
+                                        for answer in answers:
+                                            if isinstance(answer, dict) and all(isinstance(answer.get(key), str)
+                                                                               for key in ('question', 'answer')):
+                                                self._show_clarified_answer(answer['question'], answer['answer'])
                         else:
                             self._message(message)
                             for item in message.get('content') or []:
@@ -1200,7 +1218,7 @@ class App:
             self.running_tools.discard(key)
             started, title, _ = self.tasks[key]
             result = e.get('result') or {}
-            if name == 'update_plan' and not e.get('isError'):
+            if name in ('update_plan', 'review_initial_plan') and not e.get('isError'):
                 self._apply_plan(result.get('details') or {})
             elif not e.get('isError') and (result.get('details') or {}).get('skillEvent'):
                 self._apply_skill(result['details'])
@@ -1223,6 +1241,7 @@ class App:
             self._write(self.details, '\n\n'.join(part for part in (title, result) if part), replace=True)
 
     def _finish(self, status):
+        self._clear_clarification()
         self.active = False
         self.running_tools.clear()
         self._settle_stream_thoughts()
@@ -1241,6 +1260,67 @@ class App:
         if self.evidence and not self.watch:
             receipt = {'ended_utc': datetime.now(timezone.utc).isoformat(), 'status': status, 'elapsed_seconds': self.elapsed}
             (self.evidence / 'gui-settled.json').write_text(json.dumps(receipt, indent=2), encoding='utf-8')
+
+    def _show_clarification(self, event):
+        identity = event.get('id')
+        if not isinstance(identity, str) or not self.rpc:
+            return
+        try:
+            if self.exit_after_job or self.clarification:
+                raise ValueError('Open this task in visible Pi to answer the clarification.')
+            path, record, question = save_request(event, self.jobs, self.job)
+        except (OSError, ValueError) as error:
+            self._write(self.chat, '\n' + str(error) + '\n', 'error')
+            self.rpc.send('extension_ui_response', id=identity, cancelled=True)
+            return
+
+        def submit(answer):
+            if not self.clarification or self.clarification[0] != identity or answer is None:
+                return
+            try:
+                save_answer(path, record, answer)
+            except (OSError, ValueError) as error:
+                self._write(self.chat, '\nCould not save the clarification. ' + str(error) + '\n', 'error')
+                return
+            self._clear_clarification()
+            written = answer['text'] if 'text' in answer else question['choices'][answer['choice']]
+            self._show_clarified_answer(question['question'], written)
+            self.status.set('Continuing')
+            try:
+                self.rpc.send('extension_ui_response', id=identity, value='saved')
+            except OSError:
+                self._write(self.chat, '\nYour answer is saved and will be used when Pi reconnects.\n', 'error')
+
+        for key in self.running_tools:
+            tool = self.tool_cards.get(key)
+            if tool and tool['label'] == self._tool_label('prepare_prompt'):
+                tool['expanded'], tool['manual'] = False, True
+                self._render_tool(key)
+        card = ClarificationCard(self.chat, question, submit, max(270, min(620, self.chat.winfo_width() - 50)))
+        self.clarification = identity, card
+        state = self.chat.cget('state')
+        self.chat.configure(state='normal')
+        try:
+            self.chat.insert('end-1c', '\n')
+            self.chat.window_create('end-1c', window=card, align='top')
+            self.chat.insert('end-1c', '\n')
+        finally:
+            self.chat.configure(state=state)
+        self.root.after_idle(lambda: self.chat.yview_moveto(1.0) if self.clarification and
+                             self.clarification[0] == identity else None)
+        self.status.set('Waiting for your answer')
+        card.entry.focus_set()
+
+    def _show_clarified_answer(self, question, answer):
+        self._write(self.chat, '\n' + question + '\n')
+        self._write(self.chat, 'You: ' + answer + '\n', 'user')
+
+    def _clear_clarification(self):
+        if self.clarification:
+            identity, card = self.clarification
+            self.clarification = None
+            card.destroy()
+            return identity
 
     def _settle_stream_thoughts(self):
         self._render_stream_thoughts()
@@ -1262,14 +1342,15 @@ class App:
 
     def _apply_plan(self, plan):
         self.plan_steps = plan.get('steps', [])
-        self.plan_reason = plan.get('reason') or ''
+        reviewing = plan.get('reviewPending') is True
+        self.plan_reason = 'Reviewing the initial plan before starting work.' if reviewing else plan.get('reason') or ''
         if plan.get('awaitingSkill'):
             self.active_skill.set('Choosing a skill')
             self._write(self.skill_log, 'Stage needs a skill\n' + plan['awaitingSkill'] + '\n\n')
         symbols = {'completed': '✓', 'in_progress': '▸', 'pending': '○'}
         self._write(self.plan, '', replace=True)
         for index, step in enumerate(self.plan_steps, 1):
-            state = step['status']
+            state = 'pending' if reviewing else step['status']
             self._write(self.plan, f"{symbols.get(state, '○')}  {index}. {step['title']}\n", state)
         if self.plan_reason:
             self._write(self.plan, '\n' + self.plan_reason + '\n', 'reason')
@@ -1736,6 +1817,9 @@ class App:
                               context_window=context_window)
         if self.jobs:
             env['PI_GUI_RECOVERY_DIR'] = str(self.jobs.directory)
+            env['PI_GUI_PLAN_REVIEW'] = '1'
+            if not self.exit_after_job:
+                env['PI_GUI_CLARIFICATION'] = '1'
             if context_switch.qualifies(self.server):
                 env['PI_GUI_AUTO_CONTEXT'] = '1'
         marker = self.rpc_marker = object()
@@ -1859,6 +1943,9 @@ class App:
             if self.jobs.owner_running(job):
                 self.status.set('Waiting for the previous Pi process')
                 self.root.after(1000, self._recover_job)
+                return
+            if self.exit_after_job and has_saved_clarification(self.jobs, job):
+                self.root.destroy()
                 return
             native_status = self.server.status().get('status')
             if native_status == 'stopped':
@@ -2017,18 +2104,20 @@ class App:
         self._controls()
 
     def stop(self):
-        if self.job and (self.active or self.recovery_wait):
+        if self.job and (self.active or self.recovery_wait or self.clarification):
             try:
                 self.jobs.stop(self.job)
-                if not self.active and not self.pending:
+                if not self.active and not self.pending and not self.clarification:
                     self._settle_job()
                     self._finish('Stopped')
                     return
             except (OSError, ValueError) as exc:
                 self._write(self.chat, '\nCould not record Stop. ' + str(exc) + '\n', 'error')
                 return
-        if self.rpc and self.active:
+        if self.rpc and (self.active or self.clarification):
             try:
+                if identity := self._clear_clarification():
+                    self.rpc.send('extension_ui_response', id=identity, cancelled=True)
                 self.rpc.send('abort')
                 self.status.set('Stopping')
             except OSError as exc:
