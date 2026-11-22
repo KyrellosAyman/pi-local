@@ -9,7 +9,7 @@ import threading
 import time
 import tkinter as tk
 
-from app import App
+from app import App, REVIEWING_INITIAL_PLAN
 import pi_backend as backend
 from job_recovery import read_json
 
@@ -159,13 +159,16 @@ with ThreadingHTTPServer(('127.0.0.1', 0), Provider) as provider, tempfile.Tempo
         assert not provider.errors, provider.errors
         job = ui.job
         wait_for(root, lambda: 'Reviewing the initial plan' in ui.plan.get('1.0', 'end'))
+        wait_for(root, lambda: ui.status.get() == REVIEWING_INITIAL_PLAN and
+                 REVIEWING_INITIAL_PLAN in ui.activity_indicator.get())
         assert not result.exists()
         assert not ui.jobs.checkpoint(job).get('plan')
         for index in provider.paused:
             wait_for(root, provider.paused[index].is_set)
             if index == FIRST_ROUTING:
                 assert ui.jobs.checkpoint(job)['plan']['initialReview']['findings'] == EXPECTED_FINDINGS
-                wait_for(root, lambda: ui.plan_steps == plan(0))
+                wait_for(root, lambda: ui.plan_steps == plan(0) and not ui.plan_review_pending and
+                         REVIEWING_INITIAL_PLAN not in ui.status.get())
                 assert not result.exists()
             process = ui.rpc.process
             process.kill()
@@ -194,6 +197,7 @@ with ThreadingHTTPServer(('127.0.0.1', 0), Provider) as provider, tempfile.Tempo
         assert read_json(ui.jobs.directory / f"{job['id']}.outcome.json")['reason'] == 'completed'
         print(json.dumps({'initial_drafts': 1, 'committed_reviews': 1, 'actionable_steps': 3,
                           'recovered_before_and_after_review': True, 'later_plan_updates_skip_review': True,
+                          'chat_reports_review_only_while_pending': True,
                           **({'unchanged_draft_accepted': True, 'review_errors': 0} if ACCEPT else
                              {'missing_prerequisite_and_check_added': True, 'unchanged_plan_with_findings_rejected': True}),
                           'no_work_before_review': True, 'native_inference_requests': 0}))

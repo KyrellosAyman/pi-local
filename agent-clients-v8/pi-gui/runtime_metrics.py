@@ -141,7 +141,7 @@ class Metrics:
         except (OSError, ValueError, RuntimeError):
             self.previous = None
         log = getattr(self.server, 'log_path', None)
-        if log:
+        if log and result['slot'] == 'Idle':
             try:
                 with Path(log).open('rb') as file:
                     file.seek(max(0, file.seek(0, 2) - 65536))

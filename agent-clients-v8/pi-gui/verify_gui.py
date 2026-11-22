@@ -193,6 +193,27 @@ try:
   folder=project/'nested'; folder.mkdir(); (folder/'note.txt').write_text('workspace fixture')
   trace=tmp/'latency.jsonl'
   ui=app.App(root,Synthetic(),project,tmp/'state',browser_only=browser_only,latency_trace=trace)
+  ui.server.log_path=tmp/'native.log'
+  ui.server.log_path.write_text('slot print_timing: | eval time = 1000.00 ms / 31 tokens '
+                               '( 32.26 ms per token, 31.00 tokens per second)\n',encoding='utf-8')
+  speed,meter=ui.metrics_rows['speed']
+  speed_labels=meter.master.winfo_children()[0].winfo_children()
+  checks['runtime_identifies_shared_speed']=speed_labels[0].cget('text')=='Shared model speed'
+  slot={'is_processing':True,'id_task':17,'n_prompt_tokens':60000,'n_ctx':64000}
+  with patch.object(ui.server,'request',side_effect=[
+      [dict(slot,next_token=[{'n_decoded':0}])],
+      [dict(slot,next_token=[{'n_decoded':3}])],
+      [dict(slot,next_token=[{'n_decoded':6}])],
+      [dict(slot,id_task=18,next_token=[{'n_decoded':9}])],
+      [dict(slot,is_processing=False)],OSError('Server unavailable')]):
+   speeds=[]
+   for _ in range(6):
+    ui._event({'type':'local_metrics','data':ui.metrics.read()})
+    speeds.append(speed.get())
+  checks['busy_model_hides_previous_request_rate']=speeds[:2]==['Waiting for sample']*2
+  checks['runtime_reports_live_then_idle_shared_rate']=speeds[2].endswith(' tok/s live') and speeds[4]=='31.0 tok/s last'
+  checks['new_model_request_waits_for_own_speed_sample']=speeds[3]=='Waiting for sample'
+  checks['unavailable_model_does_not_report_old_rate']=speeds[5]=='—'
   def settle_rpc():
    for flag in (release, release_reasoning, release_formatted, release_tool_arguments,
                 release_after_read, release_native_start):
@@ -299,6 +320,7 @@ try:
   wait_for(lambda:ui.activity_indicator.get()!=first_animation)
   checks['reasoning_and_animation_stream_before_final_answer']=bool(first_animation) and 'Fixture completed.' not in visible()
   checks['activity_animation_keeps_the_chat_viewport_height']=idle_height>1 and ui.chat.winfo_height()==idle_height
+  wait_for(lambda:'"type": "host_sample"' in trace.read_text(encoding='utf-8'))
   release_reasoning.set()
   wait_for(lambda: 'Stream │ Pass' in visible() and ui.chat.tag_ranges('heading'))
   checks['markdown_renders_during_stream_and_reasoning_has_folded']=ui.active and (
