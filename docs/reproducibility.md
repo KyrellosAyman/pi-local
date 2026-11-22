@@ -41,6 +41,7 @@ Run these from the repository root after installing the desktop dependencies.
 & .\.venv\Scripts\python.exe -B .\agent-clients-v8\pi-gui\verify_job_recovery.py
 & .\.venv\Scripts\python.exe -B .\agent-clients-v8\pi-gui\verify_prompt_clarification.py
 & .\.venv\Scripts\python.exe -B .\agent-clients-v8\pi-gui\verify_initial_plan_review.py
+& .\.venv\Scripts\python.exe -B .\agent-clients-v8\pi-gui\verify_initial_plan_review.py --accept
 node .\agent-clients-v8\pi-gui\verify-near64-answer-room.mjs
 node .\agent-clients-v8\pi-gui\verify_stall_recovery.mjs
 node .\agent-clients-v8\pi-gui\verify_skill_availability.mjs
@@ -83,7 +84,7 @@ Place verified audio and video components under `agent-clients-v8/pi-gui/runtime
 - From NVIDIA's [NeMo-Speech.cpp v0.3.0 release](https://github.com/NVIDIA/NeMo-Speech.cpp/releases/tag/v0.3.0), download `nemo-speech-0.3.0-windows-x86_64-vulkan.zip`, verify its release SHA-256, and copy the archive's `bin/` contents to `nemo-speech/`. Pi invokes the speech engine on the CPU.
 - Put the pinned [Parakeet Q8 GGUF](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/blob/541d1f99c6b0c3cd0b11a95167540bb8edefd82b/parakeet-tdt-0.6b-v3.q8_0.gguf) next to these folders. Place `yamnet.onnx` and `yamnet_class_map.csv` from the [pinned YAMNet conversion](https://huggingface.co/audiomagic/yamnet-onnx/tree/f25b741c2f0bdc6d7e6db24b5fddda23347dbafd) in `yamnet/`. The label map's SHA-256 is `cdf24d193e196d9e95912a2667051ae203e92a2ba09449218ccb40ef787c6df2`.
 
-For the optional Chrome workflow, open the approved page in the intended Chrome window. Pi checks that the current address and the accessible page document identify the same page before exposing its controls. If Windows exposes only Chrome’s toolbar, finish your browser work and exit Chrome completely. Start Chrome with `--force-renderer-accessibility=complete` and reopen the approved page. See the [Chromium accessibility documentation](https://chromium.googlesource.com/chromium/src/+/HEAD/tools/accessibility/inspect/).
+For the optional Chrome workflow, open the approved page in the intended Chrome window. Pi checks that the current address and the accessible page document identify the same page before exposing its controls. To reproduce a scoped read, give Pi the approved window ID and exact control label. Ask it to read that control without a screenshot or page action. Compare the result with the control in Chrome. If Windows exposes only Chrome’s toolbar, finish your browser work and exit Chrome completely. Start Chrome with `--force-renderer-accessibility=complete` and reopen the approved page. See the [Chromium accessibility documentation](https://chromium.googlesource.com/chromium/src/+/HEAD/tools/accessibility/inspect/).
 
 In Pi, select **Audio report**, choose a local recording, then set the window and optional channel. Pi displays decoded levels and their channel references, plus provisional sound labels and a speech transcript. This route uses the local media runtime directly and requires no chat model. The audio alone leaves the recording setup and speaker identities unresolved.
 

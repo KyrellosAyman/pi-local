@@ -1,4 +1,6 @@
 """Exercise first-plan review and recovery through the pinned local RPC and Tk desktop."""
+from argparse import ArgumentParser
+from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -15,15 +17,29 @@ from job_recovery import read_json
 KEY = 'local-initial-plan-fixture'
 PROMPT = 'Read labels.txt before copying it to result.txt. Verify the output matches the original exactly.'
 SOURCE = b'Original label witness 46527.\n'
-DRAFT = [{'id': 'make-file', 'title': 'Handle the file task', 'skillQuery': 'general-task', 'status': 'in_progress'}]
+CHECKPOINT = 'output-checkpoint.json'
+CHECKPOINT_BYTES = json.dumps({'finished_files': [
+    {'path': 'result.txt', 'sha256': sha256(SOURCE).hexdigest()}
+]}).encode()
 FINDINGS = ['The draft missed reading the original before writing.', 'Add a separate exact comparison after writing.']
 
 
 def plan(index):
     return [{'id': key, 'title': title, 'skillQuery': 'general-task',
+             **({'checkpoint': CHECKPOINT} if ACCEPT and key == 'verify' else {}),
              'status': 'completed' if i < index else 'in_progress' if i == index else 'pending'}
             for i, (key, title) in enumerate([('inspect', 'Read the original labels'), ('copy', 'Copy the recorded bytes'),
                                              ('verify', 'Compare the new file with the original')])]
+
+
+parser = ArgumentParser(description=__doc__)
+parser.add_argument('--accept', action='store_true', help='Accept a complete draft without rewriting it.')
+ACCEPT = parser.parse_args().accept
+DRAFT = plan(0) if ACCEPT else [
+    {'id': 'make-file', 'title': 'Handle the file task', 'skillQuery': 'general-task', 'status': 'in_progress'}]
+EXPECTED_FINDINGS = [] if ACCEPT else FINDINGS
+FIRST_REVIEW = 2 if ACCEPT else 3
+FIRST_ROUTING = FIRST_REVIEW + 2
 
 
 class Provider(BaseHTTPRequestHandler):
@@ -36,14 +52,15 @@ class Provider(BaseHTTPRequestHandler):
         index = len(self.server.requests)
         self.server.requests.append(payload)
         offered = [tool['function']['name'] for tool in payload['tools']]
-        review = ('review_initial_plan', {'steps': [{key: value for key, value in step.items() if key != 'status'}
-                                                   for step in plan(0)], 'findings': FINDINGS})
+        review = ('review_initial_plan', {} if ACCEPT else {
+            'steps': [{key: value for key, value in step.items() if key != 'status'} for step in plan(0)],
+            'findings': FINDINGS})
         unchanged = ('review_initial_plan', {'steps': [{key: value for key, value in DRAFT[0].items() if key != 'status'}],
                                              'findings': FINDINGS})
         find = ('find_skills', {'query': 'general-task'})
         actions = [
             ('prepare_prompt', {'brief': PROMPT, 'checks': ['Read first and compare bytes at the end']}),
-            ('update_plan', {'steps': DRAFT}), unchanged, review, review, find, find,
+            ('update_plan', {'steps': DRAFT}), *([] if ACCEPT else [unchanged]), review, review, find, find,
             ('use_skill', {'name': 'general-task', 'reason': 'Copy and verify the fixture.'}),
             ('read', {'path': 'labels.txt'}), ('update_plan', {'steps': plan(1)}),
             ('write', {'path': 'result.txt', 'content': SOURCE.decode()}),
@@ -52,14 +69,16 @@ class Provider(BaseHTTPRequestHandler):
         ]
         try:
             action = actions[index]
-            if index in (2, 3, 4):
+            if 2 <= index < FIRST_ROUTING:
                 assert offered == ['review_initial_plan'] and payload['tool_choice'] == 'required'
-                schema = payload['tools'][0]['function']['parameters']['properties']['steps']['items']
-                assert 'status' not in schema['properties']
+                schema = payload['tools'][0]['function']['parameters']
+                assert 'status' not in schema['properties']['steps']['items']['properties']
+                if ACCEPT:
+                    assert 'steps' not in schema.get('required', []), 'An unchanged draft must accept an empty tool call.'
                 assert DRAFT[0]['title'] in payload['messages'][0]['content']
-            elif index >= 5:
+            elif index >= FIRST_ROUTING:
                 assert 'review_initial_plan' not in offered
-            if index in (3, 5):
+            if index in (FIRST_REVIEW, FIRST_ROUTING):
                 self.server.paused[index].set()
                 assert self.server.release[index].wait(15)
             finish, delta = 'stop', {'role': 'assistant', 'content': 'Plan review fixture complete.'}
@@ -111,7 +130,7 @@ def wait_for(root, predicate, timeout=25):
 
 with ThreadingHTTPServer(('127.0.0.1', 0), Provider) as provider, tempfile.TemporaryDirectory(prefix='pi-plan-review-') as directory:
     provider.requests, provider.errors = [], []
-    provider.paused = {i: threading.Event() for i in (3, 5)}
+    provider.paused = {i: threading.Event() for i in (FIRST_REVIEW, FIRST_ROUTING)}
     provider.release = {i: threading.Event() for i in provider.paused}
     threading.Thread(target=provider.serve_forever, daemon=True).start()
     prepare = backend.prepare
@@ -128,21 +147,24 @@ with ThreadingHTTPServer(('127.0.0.1', 0), Provider) as provider, tempfile.Tempo
     state.mkdir()
     source, result = workspace / 'labels.txt', workspace / 'result.txt'
     source.write_bytes(SOURCE)
+    if ACCEPT:
+        (workspace / CHECKPOINT).write_bytes(CHECKPOINT_BYTES)
     root = tk.Tk()
     root.withdraw()
     ui = App(root, MockModel(), workspace, state, recover_jobs=True)
     try:
         ui.prompt.insert('1.0', PROMPT)
         ui.send_button.invoke()
-        wait_for(root, provider.paused[3].is_set)
+        wait_for(root, lambda: provider.errors or provider.paused[FIRST_REVIEW].is_set())
+        assert not provider.errors, provider.errors
         job = ui.job
         wait_for(root, lambda: 'Reviewing the initial plan' in ui.plan.get('1.0', 'end'))
         assert not result.exists()
         assert not ui.jobs.checkpoint(job).get('plan')
         for index in provider.paused:
             wait_for(root, provider.paused[index].is_set)
-            if index == 5:
-                assert ui.jobs.checkpoint(job)['plan']['initialReview']['findings'] == FINDINGS
+            if index == FIRST_ROUTING:
+                assert ui.jobs.checkpoint(job)['plan']['initialReview']['findings'] == EXPECTED_FINDINGS
                 wait_for(root, lambda: ui.plan_steps == plan(0))
                 assert not result.exists()
             process = ui.rpc.process
@@ -151,21 +173,29 @@ with ThreadingHTTPServer(('127.0.0.1', 0), Provider) as provider, tempfile.Tempo
             provider.release[index].set()
         wait_for(root, lambda: not ui.active and ui.status.get() in ('Finished', 'Failed', 'Needs review'))
         assert ui.status.get() == 'Finished', (ui.status.get(), provider.errors)
-        assert not provider.errors and len(provider.requests) == 15
-        assert source.read_bytes() == result.read_bytes() == SOURCE and ui.plan_steps == plan(3)
+        assert not provider.errors and len(provider.requests) == FIRST_ROUTING + 10
+        assert source.read_bytes() == result.read_bytes() == SOURCE
+        assert [{k: v for k, v in step.items() if k != 'checkpointProof'} for step in ui.plan_steps] == plan(3)
         state = ui.jobs.checkpoint(job)
         assert state['phase'] == 'completed' and state['recovered'] == 2
         rows = [json.loads(line) for line in Path(job['session']).read_bytes().splitlines()]
         assert sum(row.get('message', {}).get('role') == 'user' for row in rows) == 1
         assert sum(row.get('customType') == 'gui-initial-plan-draft' for row in rows) == 1
         reviews = [row['data'] for row in rows if row.get('customType') == 'gui-plan' and row.get('data', {}).get('initialReview')]
-        assert len(reviews) == 1 and reviews[0]['steps'] == plan(0) and reviews[0]['initialReview']['findings'] == FINDINGS
-        assert any(row.get('message', {}).get('isError') and
-                   'Put the reported corrections' in row['message']['content'][0]['text'] for row in rows)
+        assert len(reviews) == 1 and reviews[0]['steps'] == plan(0) and reviews[0]['initialReview']['findings'] == EXPECTED_FINDINGS
+        rejected = [row for row in rows if row.get('message', {}).get('toolName') == 'review_initial_plan'
+                    and row['message'].get('isError')]
+        if ACCEPT:
+            assert reviews[0]['steps'] == DRAFT and not rejected
+            assert (workspace / CHECKPOINT).read_bytes() == CHECKPOINT_BYTES
+            assert state['plan']['steps'][-1]['checkpointProof']['sha256'] == sha256(CHECKPOINT_BYTES).hexdigest()
+        else:
+            assert len(rejected) == 1 and 'Put the reported corrections' in rejected[0]['message']['content'][0]['text']
         assert read_json(ui.jobs.directory / f"{job['id']}.outcome.json")['reason'] == 'completed'
         print(json.dumps({'initial_drafts': 1, 'committed_reviews': 1, 'actionable_steps': 3,
                           'recovered_before_and_after_review': True, 'later_plan_updates_skip_review': True,
-                          'missing_prerequisite_and_check_added': True, 'unchanged_plan_with_findings_rejected': True,
+                          **({'unchanged_draft_accepted': True, 'review_errors': 0} if ACCEPT else
+                             {'missing_prerequisite_and_check_added': True, 'unchanged_plan_with_findings_rejected': True}),
                           'no_work_before_review': True, 'native_inference_requests': 0}))
     finally:
         for barrier in provider.release.values():

@@ -216,6 +216,7 @@ export function registerSkillWorkflow(pi) {
 			"\n\nApply these two built-in skills on every Pi task. " + (recovery && prepared
 				? "The saved brief is active. Continue the recorded plan and update it only as the work changes. "
 				: "Call prepare_prompt once if there is no saved brief. For tool work without a plan, call update_plan with one in-progress step and a skillQuery for each step. ") +
+			"For a scoped Chrome MCP state read, use the exact skillQuery pi-tool-catalog. " +
 			(recovery && active ? "The verified skill route is active. Continue from the saved step. "
 				: "If the current stage has no active skill, call find_skills, judge coverage, then call use_skill by itself before starting work. ") +
 			"For a missing skill, use available research tools or ask for a local skill, then load and apply the verified revision. Before completing the plan, publish only the revision checked against source evidence and an actual successful tool result. " +
