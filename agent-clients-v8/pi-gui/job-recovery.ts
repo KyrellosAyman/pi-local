@@ -19,9 +19,10 @@ type Job = { id: string; session: string; workspace: string; previous_user: stri
 	payload: { message: string; images?: unknown[] } };
 type Phase = "running" | "completed" | "stopped" | "failed" | "needs_review";
 type Status = "succeeded" | "error" | "applied" | "unapplied";
-type StageCheckpointProof = { sha256: string; verifiedAt: string };
+type StageVerification = { job: string; step: string; call: string; snapshot: string };
+type StageCheckpointProof = { sha256: string; verifiedAt: string; verification?: StageVerification };
 type Step = { id: string; title: string; skillQuery: string; status: "pending" | "in_progress" | "completed";
-	checkpoint?: string; checkpointProof?: StageCheckpointProof };
+	checkpoint?: string; verifyWith?: string; checkpointProof?: StageCheckpointProof };
 type Plan = { steps: Step[]; reason?: string; awaitingSkill?: string; updatedAt?: string;
 	initialReview?: { job: string; findings: string[] } };
 type WideRequest = { context: 131072; reason: "threshold" | "overflow"; tokensBefore: number; discardedToolTokens: number };
@@ -168,10 +169,16 @@ function planFrom(value: unknown): Plan | undefined {
 		typeof step.title === "string" && typeof step.skillQuery === "string" &&
 		["pending", "in_progress", "completed"].includes(step.status) &&
 		(step.checkpoint === undefined || typeof step.checkpoint === "string" && step.checkpoint.length > 0) &&
+		(step.verifyWith === undefined || Boolean(step.checkpoint) && typeof step.verifyWith === "string" && step.verifyWith.length > 0) &&
 		(step.status !== "completed" || !step.checkpoint || Boolean(step.checkpointProof)) &&
+		(step.status !== "completed" || !step.verifyWith || Boolean(step.checkpointProof?.verification)) &&
 		(step.checkpointProof === undefined || step.status === "completed" && Boolean(step.checkpoint) &&
 			isDigest(step.checkpointProof?.sha256) && typeof step.checkpointProof?.verifiedAt === "string" &&
-			Number.isFinite(Date.parse(step.checkpointProof.verifiedAt))))) return;
+			Number.isFinite(Date.parse(step.checkpointProof.verifiedAt)) &&
+			(step.checkpointProof.verification === undefined || Boolean(step.verifyWith) &&
+				jobId.test(step.checkpointProof.verification.job) && step.checkpointProof.verification.step === step.id &&
+				typeof step.checkpointProof.verification.call === "string" && step.checkpointProof.verification.call.length > 0 &&
+				isDigest(step.checkpointProof.verification.snapshot))))) return;
 	return { steps: plan.steps, reason: typeof plan.reason === "string" ? plan.reason : undefined,
 		awaitingSkill: typeof plan.awaitingSkill === "string" ? plan.awaitingSkill : undefined,
 		updatedAt: typeof plan.updatedAt === "string" ? plan.updatedAt : undefined,
@@ -244,7 +251,7 @@ function fileImage(cwd: string, path: string, includeBytes = false):
 	}
 }
 
-function stageCheckpoint(cwd: string, name: string) {
+function stageCheckpoint(cwd: string, name: string, observeRevision = false) {
 	const path = writePath(cwd, name);
 	const manifest = path ? fileImage(cwd, path, true) : undefined;
 	if (!path || !manifest?.image || !manifest.bytes) {
@@ -260,29 +267,60 @@ function stageCheckpoint(cwd: string, name: string) {
 		throw new Error("List the checkpointed paths and SHA-256 values in finished_files before closing the stage.");
 	}
 	const seen = new Set([pathKey(path)]);
+	const revisions = observeRevision ? createHash("sha256").update(JSON.stringify([manifest.root, manifest.image.revision])) : undefined;
 	for (const file of files) {
 		const target = typeof file?.path === "string" ? writePath(cwd, file.path) : undefined;
+		const current = target ? fileImage(cwd, target) : undefined;
 		if (!target || seen.has(pathKey(target)) || !isDigest(file?.sha256) ||
-			fileImage(cwd, target)?.image?.digest !== file.sha256) {
+			current?.root !== manifest.root || current.image?.digest !== file.sha256) {
 			throw new Error("Checkpoint artifact could not be verified: " + JSON.stringify(file?.path));
 		}
+		revisions?.update(JSON.stringify([pathKey(target), current.image.revision]));
 		seen.add(pathKey(target));
 	}
-	return { sha256: manifest.image.digest, paths: seen };
+	return { sha256: manifest.image.digest, paths: seen, root: manifest.root, snapshot: revisions?.digest("hex") };
 }
 
 export function verifyStageCheckpoint(cwd: string, name: string): StageCheckpointProof {
 	return { sha256: stageCheckpoint(cwd, name).sha256, verifiedAt: new Date().toISOString() };
 }
 
-function completedCheckpointPaths(cwd: string, plan?: Plan) {
+export function stageVerificationSnapshot(cwd: string, checkpoint: string, verifier: string) {
+	const manifest = stageCheckpoint(cwd, checkpoint, true);
+	const path = writePath(cwd, verifier);
+	const script = path ? fileImage(cwd, path) : undefined;
+	if (!path || !script?.image || script.root !== manifest.root || manifest.paths.has(pathKey(path))) {
+		throw new Error("Use a separate saved verifier script within this workspace: " + verifier);
+	}
+	return { sha256: manifest.sha256, paths: manifest.paths.add(pathKey(path)),
+		snapshot: sha256(JSON.stringify([manifest.snapshot, pathKey(path), script.image.digest, script.image.revision])) };
+}
+
+function completedCheckpointPaths(cwd: string, plan: Plan | undefined, job: string, branch: SessionEntry[]) {
 	const paths = new Set<string>();
 	for (const step of plan?.steps ?? []) {
 		if (step.status !== "completed" || !step.checkpoint || !step.checkpointProof) continue;
 		try {
-			const current = stageCheckpoint(cwd, step.checkpoint);
+			const proof = step.checkpointProof.verification;
+			const current = step.verifyWith ? stageVerificationSnapshot(cwd, step.checkpoint, step.verifyWith)
+				: stageCheckpoint(cwd, step.checkpoint);
 			if (current.sha256 !== step.checkpointProof.sha256) {
 				throw new Error("The checkpoint manifest differs from the saved verification receipt.");
+			}
+			if (step.verifyWith) {
+				if (proof?.job !== job || proof.snapshot !== current.snapshot) {
+					throw new Error("The verified script or artifact revision changed. Run the planned verification again.");
+				}
+				const entry = branch.findLast((row) => row.type === "message" && row.message.role === "toolResult" &&
+					row.message.toolCallId === proof.call && row.message.toolName === "run_script");
+				const result = entry?.type === "message" && entry.message.role === "toolResult" ? entry.message : undefined;
+				const saved = result?.details as { exitCode?: number; checkpointProof?: StageCheckpointProof } | undefined;
+				if (result?.isError !== false || saved?.exitCode !== 0 || saved.checkpointProof?.sha256 !== current.sha256 ||
+					saved.checkpointProof.verifiedAt !== step.checkpointProof.verifiedAt ||
+					saved.checkpointProof.verification?.snapshot !== proof.snapshot || saved.checkpointProof.verification.job !== job ||
+					saved.checkpointProof.verification.step !== step.id || saved.checkpointProof.verification.call !== proof.call) {
+					throw new Error("The recorded verifier result is missing or differs from the plan receipt.");
+				}
 			}
 			for (const path of current.paths) paths.add(path);
 		} catch (error) {
@@ -318,6 +356,12 @@ export function boundDesktopJob(ctx: ExtensionContext, directory = process.env.P
 		throw new Error("Pi recovery job is not bound to this workspace and session.");
 	}
 	return value;
+}
+
+export function requestedStageVerification(message: string) {
+	// shortcut: bind one explicit plan requirement for simple workspace paths, and use the plan schema for other cases.
+	const matches = [...message.matchAll(/\bIn the (?:Pi )?plan,[ \t]+require (?:the )?checkpoint (["'`]?)([\w./\\-]+\.json)\1 and (?:the )?verifier (?:script )?(["'`]?)([\w./\\-]+\.(?:py|m?js|cjs))\3(?=$|[\s!?,;]|\.(?:\s|$))/gi)];
+	if (matches.length === 1) return { checkpoint: matches[0][2], verifyWith: matches[0][4] };
 }
 
 export function registerJobRecovery(pi: ExtensionAPI) {
@@ -468,7 +512,7 @@ export function registerJobRecovery(pi: ExtensionAPI) {
 				if ((event.details as { reviewPending?: boolean })?.reviewPending) return;
 				const plan = planFrom(event.details);
 				if (plan) {
-					const sealedPaths = completedCheckpointPaths(active.job.workspace, plan);
+					const sealedPaths = completedCheckpointPaths(active.job.workspace, plan, active.job.id, ctx.sessionManager.getBranch());
 					save(active, { plan });
 					active.sealedPaths = sealedPaths;
 				}
@@ -505,8 +549,15 @@ export function registerJobRecovery(pi: ExtensionAPI) {
 			entry.message.role === "assistant") : undefined;
 		const reason = answer?.type === "message" && answer.message.role === "assistant" ? answer.message.stopReason : undefined;
 		if (reason === "stop") {
+			const required = requestedStageVerification(run.job.payload.message);
+			if (required && !run.checkpoint.plan?.steps.some((step) =>
+				step.checkpoint === required.checkpoint && step.verifyWith === required.verifyWith)) {
+				return save(run, { phase: "needs_review", note: `The plan is missing the required verification for ${required.checkpoint}.` });
+			}
+			const open = run.checkpoint.plan?.steps.find((step) => step.verifyWith && step.status !== "completed");
+			if (open) return save(run, { phase: "needs_review", note: `Required verification is still open for ${open.title}.` });
 			try {
-				completedCheckpointPaths(run.job.workspace, run.checkpoint.plan);
+				completedCheckpointPaths(run.job.workspace, run.checkpoint.plan, run.job.id, branch);
 			} catch (error) {
 				return save(run, { phase: "needs_review", note: (error as Error).message });
 			}
@@ -593,7 +644,7 @@ export function registerJobRecovery(pi: ExtensionAPI) {
 				throw new Error(note);
 			}
 			try {
-				run.sealedPaths = completedCheckpointPaths(job.workspace, plan);
+				run.sealedPaths = completedCheckpointPaths(job.workspace, plan, job.id, branch);
 			} catch (error) {
 				const note = "Pi paused recovery. " + (error as Error).message;
 				save(run, { phase: "needs_review", note, pending, completed, plan });

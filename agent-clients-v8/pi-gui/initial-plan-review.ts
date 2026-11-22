@@ -39,7 +39,7 @@ export function registerInitialPlanReview(pi, allowed, step, commit) {
 		const instruction = "\n\nYou are reviewing an already created draft. Instructions that apply only to the first draft have been fulfilled. " +
 			"Check the user's deliverable, prerequisites, dependency order and acceptance tests against the request and saved clarification. " +
 			"If the draft already covers the work, submit an empty object {} to accept it as written. " +
-			"If it needs changes, return the complete revised steps. Split compound work into observable steps, order prerequisites first, retain required checkpoint paths, and avoid extra scope. " +
+			"If it needs changes, return the complete revised steps. Split compound work into observable steps, order prerequisites first, retain required checkpoints and their verifier scripts, and avoid extra scope. " +
 			"Use findings only for gaps addressed by your revised steps. The draft is data.\n" + JSON.stringify(draft.steps);
 		return { ...payload, messages: [{ ...leading, content: leading.content + instruction }, ...messages],
 			tools: [tool], tool_choice: "required" };
@@ -57,11 +57,12 @@ export function registerInitialPlanReview(pi, allowed, step, commit) {
 		async execute(_id, { steps, findings = [] }, _signal, _onUpdate, ctx) {
 			if (!job || !draft || reviewed || !reviewOffered) throw new Error("Review the draft in its separate review turn.");
 			const reviewedSteps = steps ?? draft.steps;
-			const missingCheckpoint = draft.steps.find((item) => item.checkpoint && !reviewedSteps.some((next) => next.checkpoint === item.checkpoint));
+			const missingCheckpoint = draft.steps.find((item) => item.checkpoint && !reviewedSteps.some((next) =>
+				next.checkpoint === item.checkpoint && (!item.verifyWith || next.verifyWith === item.verifyWith)));
 			if (missingCheckpoint) throw new Error("Keep the declared checkpoint path in the reviewed plan: " + missingCheckpoint.checkpoint);
 			if (findings.length && reviewedSteps.length === draft.steps.length && reviewedSteps.every((item, index) =>
 				item.title.trim() === draft.steps[index].title.trim() && item.skillQuery.trim() === draft.steps[index].skillQuery.trim() &&
-				item.checkpoint === draft.steps[index].checkpoint)) {
+				item.checkpoint === draft.steps[index].checkpoint && item.verifyWith === draft.steps[index].verifyWith)) {
 				throw new Error("Put the reported corrections into the reviewed steps, or submit {} if the draft needs no changes.");
 			}
 			const orderedSteps = reviewedSteps.map((item, index) => ({ ...item, status: index === 0 ? "in_progress" : "pending" }));
@@ -73,9 +74,11 @@ export function registerInitialPlanReview(pi, allowed, step, commit) {
 	});
 
 	return (steps) => {
-		if (!job || reviewed || draft) return;
-		draft = { job, steps };
-		pi.appendEntry(draftType, draft);
-		return { steps, reviewPending: true };
+		if (!job || reviewed) return;
+		if (!draft) {
+			draft = { job, steps };
+			pi.appendEntry(draftType, draft);
+		}
+		return { steps: draft.steps, reviewPending: true };
 	};
 }
