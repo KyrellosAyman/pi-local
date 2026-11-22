@@ -61,6 +61,7 @@ THEME_OPTIONS = ('background', 'foreground', 'insertbackground', 'selectbackgrou
                  'activebackground', 'activeforeground', 'disabledforeground')
 MARKDOWN = MarkdownIt('commonmark', {'html': False}).enable('table').enable('strikethrough')
 SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+REVIEWING_INITIAL_PLAN = 'Reviewing the initial plan'
 LIVE_MARKDOWN_LIMIT = 4096
 TOOL_LABELS = {'powershell': 'PowerShell command', 'bash': 'Shell command', 'read': 'Read file',
                'write': 'Write file', 'edit': 'Edit file', 'grep': 'Search files', 'find': 'Find files',
@@ -147,6 +148,7 @@ class App:
         self.compactions = 0
         self.plan_steps = []
         self.plan_reason = ''
+        self.plan_review_pending = False
         self.attachments = []
         self.audio_report_window = None
         self.history = []
@@ -474,7 +476,7 @@ class App:
         self.metrics_rows = {}
         for key, title in [('vram', 'GPU memory'), ('gpu', 'GPU temperature / load'),
                            ('cpu', 'CPU utilization'), ('ram', 'System RAM'),
-                           ('context', 'Context window'), ('speed', 'Generation speed')]:
+                           ('context', 'Context window'), ('speed', 'Shared model speed')]:
             row = tk.Frame(overview, bg=PANEL, padx=14, pady=4)
             row.pack(fill='x')
             top = tk.Frame(row, bg=PANEL)
@@ -778,7 +780,9 @@ class App:
             self.elapsed = None
             self.status.set('Preparing response')
         elif kind == 'turn_start' and self.active:
-            if self.status.get() != 'Processing tool results':
+            if self.plan_review_pending:
+                self.status.set(REVIEWING_INITIAL_PLAN)
+            elif self.status.get() != 'Processing tool results':
                 self.status.set('Preparing response')
         elif kind == 'agent_settled':
             phase = self._settle_job() if self.job else None
@@ -870,7 +874,9 @@ class App:
         if kind in ('thinking_start', 'text_start', 'toolcall_start') and self.active:
             phase = {'thinking_start': 'Thinking', 'text_start': 'Writing reply',
                      'toolcall_start': 'Preparing tool'}[kind]
-            if kind == 'toolcall_start' and event.get('toolName'):
+            if kind == 'thinking_start' and self.plan_review_pending:
+                phase = REVIEWING_INITIAL_PLAN
+            elif kind == 'toolcall_start' and event.get('toolName'):
                 phase += ' · ' + self._tool_label(event['toolName'])
             self.status.set(phase)
         # Some providers emit thinking_end after the whole message, including its tool arguments.
@@ -1232,7 +1238,7 @@ class App:
             if self.activity.selection() == (key,):
                 self._selected()
             if self.active and not self.running_tools:
-                self.status.set('Processing tool results')
+                self.status.set(REVIEWING_INITIAL_PLAN if self.plan_review_pending else 'Processing tool results')
 
     def _selected(self, _=None):
         current = self.activity.selection()
@@ -1243,6 +1249,7 @@ class App:
     def _finish(self, status):
         self._clear_clarification()
         self.active = False
+        self.plan_review_pending = False
         self.running_tools.clear()
         self._settle_stream_thoughts()
         self.refresh_files()
@@ -1343,6 +1350,7 @@ class App:
     def _apply_plan(self, plan):
         self.plan_steps = plan.get('steps', [])
         reviewing = plan.get('reviewPending') is True
+        self.plan_review_pending = reviewing
         self.plan_reason = 'Reviewing the initial plan before starting work.' if reviewing else plan.get('reason') or ''
         if plan.get('awaitingSkill'):
             self.active_skill.set('Choosing a skill')
@@ -1418,8 +1426,10 @@ class App:
         limit = data.get('context_max')
         set_meter('context', f'{used:,} / {limit:,}' if used is not None and limit else '—', used, limit)
         live, last = data.get('live_rate'), data.get('last_rate')
-        speed = f'{live:.1f} tok/s live' if live is not None else (
-            f'{last:.1f} tok/s last' if last is not None else '—')
+        if data['slot'] == 'Busy':
+            speed = f'{live:.1f} tok/s live' if live is not None else 'Waiting for sample'
+        else:
+            speed = f'{last:.1f} tok/s last' if last is not None else '—'
         set_meter('speed', speed)
 
     def _refresh_history(self):
@@ -2157,6 +2167,7 @@ class App:
         self.compactions = 0
         self.plan_steps = []
         self.plan_reason = ''
+        self.plan_review_pending = False
         self.last_answer = ''
         self.tasks.clear()
         for card in self.tool_cards.values():

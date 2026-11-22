@@ -56,6 +56,16 @@ For a stage that declares a checkpoint, keep the completed outputs listed under 
 
 The clarification fixture drives actual Tk buttons and the fourth-row text field, with interruptions before an answer and after saving it. The review fixture starts with a broad draft that lacks a read and a comparison, then checks that the reviewer runs before work and that later plan updates skip it. The near-context fixture tests the loopback tokenizer call, output allowance, and smaller direct tool catalog without starting a model.
 
+The desktop checks exercise the **Shared model speed** meter during idle, active and unavailable service states. The two first-plan fixtures check that **Reviewing the initial plan** appears while a draft is pending and clears before work proceeds, including recovery on both sides of the review.
+
+### Compare short and near-limit decode
+
+Use the optimized 64k profile with one local model process and an idle slot. Prepare two versions of the same request using text from `research/archive-32/workspace/pages/`. Keep the short version near 4,800 input tokens and repeat the public source text to bring the longer version near 59,500 tokens. End each request with `Write exactly the integers from 1 through 48 in order, separated by commas. Output only the sequence.`
+
+1. Submit short, near-limit and short in order through the same local model endpoint. Keep sampling and reasoning settings identical and disable cache reuse for all three arms. Leave enough input room for the full answer.
+2. Verify the actual input lengths, byte-exact answer, identical output token counts, and equal draft acceptances. Record native prefill and decode separately. Record a changed answer or a missing timing record as a failed comparison.
+3. If collecting GPU counters, align samples to the completed native requests and keep samples that fall completely within the measured phase. Report sample counts alongside medians. This procedure uses the released synthetic text. The [evidence ledger](../research/evidence/2026-11-22-desktop-performance.md) reports the historical run's aggregate measurements.
+
 ## Repeat the 32-page archive workload
 
 1. Configure the standard profile and keep an exclusive model slot. Run `& .\.venv\Scripts\python.exe -B .\research\archive-32\run.py`. The runner copies the frozen input into `.local/archive-32/workspace` and opens the normal Pi composer against isolated state.
@@ -96,8 +106,8 @@ Install [the paper requirements](../research/requirements.txt) in the same virtu
 
 ```powershell
 & .\.venv\Scripts\python.exe -m pip install -r .\research\requirements.txt
-& .\.venv\Scripts\python.exe -B .\research\render_paper.py 0.1.3
-& .\.venv\Scripts\python.exe -B .\research\render_paper.py 0.1.3 --check
+& .\.venv\Scripts\python.exe -B .\research\render_paper.py 0.1.5
+& .\.venv\Scripts\python.exe -B .\research\render_paper.py 0.1.5 --check
 ```
 
-This checkout contains the [editable report](../research/PAPER.md) and the [0.1.3 PDF](../research/pi-local-v0.1.3.pdf). The [0.1.2 PDF](../research/pi-local-v0.1.2.pdf) and [0.1.1 PDF](../research/pi-local-v0.1.1.pdf) preserve earlier results.
+This checkout contains the [editable report](../research/PAPER.md) and the [0.1.5 PDF](../research/pi-local-v0.1.5.pdf). The [release history](releasing.md#release-history) links to the previous papers.

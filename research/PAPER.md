@@ -3,13 +3,15 @@
 
 **KyrellosAyman**
 
-Technical report • Version 0.1.4 • 22 November 2026
+Technical report • Version 0.1.5 • 22 November 2026
 
 ### Abstract
 
 Pi Local is a Windows desktop harness for running a local multimodal language model, combining local tools, and recovering interrupted work. We developed a desktop client around a pinned Pi RPC runtime and a self-managed llama.cpp service, then evaluated tool routing, source retention, checkpoint integrity, and performance on one consumer workstation. An elapsed recovery trial retained one prompt across two process interruptions, delivered all 32 original archive pages in order, and produced the exact reconciliation after 18 compactions. The optimized 64,000-token profile improved decode on four matched controls without changing their final output bytes. At 59,419 input tokens, it raised decode from 11.61 to 23.69 tokens/s while total response time increased from 123.14 to 144.78 seconds. Larger source, software, audio, and video workloads exposed accuracy and performance failures. This report records the experimental conditions, the negative results, and the boundaries of reproduction. The public release contains the code, presets, synthetic archive inputs, and the procedures for independent checks.
 
 In a separate native test near 60,000 input tokens, warming a stable prompt prefix reduced three-request time from 456.887 to 156.467 seconds, including the warmup. The same file-read arguments, plan update, and final code were observed. A matched desktop test cut first-plan review retries from two to zero. Production chat adoption of the cache result remains open.
+
+A later 36-minute desktop run passed strict grading with up to 61,573 input tokens while median near-limit decode fell to 3.20 tokens/s. Changing only the input in a short, near-limit and short control produced decode rates of 32.56, 8.90 and 32.48 tokens/s with an identical answer. The desktop now reports the pending first-plan review and distinguishes a live shared speed sample from the idle rate. [8]
 
 **Keywords**  Local inference, agent harness, checkpointing, source retention, speculative decoding, reproducible evaluation.
 
@@ -85,6 +87,10 @@ One fixed long-source text task exposed a separate reply budget error. The stock
 The final live run reached 61,232 input tokens, matched seven native requests, used one registered file read, and returned all three required codes on one line in 944.57 seconds. No compaction occurred. The median of six near-limit requests was 19.566 tokens/s, three of six fell below 20, and none reached 40. A cached wait after the file tool was 1.22 seconds, while multiple full prompts took about 150 seconds to prepare. None of 263 host samples reached joint 95% CPU and RAM. This result establishes task completion in the tested text case. The tokenizer check excludes image and audio inputs.
 
 Two frozen desktop runs attributed 94.74% and 94.61% of total time to prompt processing. Each had five post-tool waits over 100 seconds. Prompt processing accounted for over 99.5% of those waits. In a separate three-stage raw-completion experiment on the same running model, the current and alternate template orders both recomputed the full prompt at each stage. Their summed request times were 456.887 and 454.055 seconds. With an explicit warmup, the alternate reused 59,651 to 59,655 tokens per request and used 156.467 seconds including the warmup. All three expected operations still matched. Decode ranged from 17.217 to 22.729 tokens/s in the warmed arm. The observer was interrupted after the warmup and recovered the same native task. Request totals exclude that observer interval. The production chat API and desktop trial remain open.
+
+A later uncoached visible Pi run passed the same strict source and answer checks in 2,205.93 seconds. It performed one initial review and seven successful tool calls, including the exact registered file read. All eight requests matched the native log. The maximum input was 61,573 tokens, with seven near-limit requests below 20 tokens/s and a 3.20 tokens/s median. During the first four post-tool waits, native prefill accounted for over 99.8% of their 263–280 seconds. Tk handled the first output in 16–40 ms. The mapped chat viewport held its height and the animation advanced. After the file read, reuse of 61,550 tokens let the next request deliver output in 0.952 seconds. None of 628 host samples met the joint 95% threshold. [8]
+
+A cold short, near-limit and short comparison on the unchanged process measured 4,790, 59,537 and 4,790 input tokens. All three arms produced the same 182-token answer and accepted 121 of 122 draft tokens. Prefill took 9.09, 179.13 and 9.07 seconds. Decode measured 32.56, 8.90 and 32.48 tokens/s. Fifteen guarded samples during the near-limit decode reported a median device PCIe transmit rate of 17,814 MB/s. The short arms yielded too few guarded samples for a paired device comparison. Earlier byte-identical short controls on that process also varied between about 11.5 and 33 tokens/s. The results establish the slowdown for this longer input and motivate a controlled GPU memory placement comparison. The transfer mechanism remains open. [8]
 
 ## 5. Recovery and accuracy results
 
@@ -196,3 +202,5 @@ Pi has demonstrated a standalone local model lifecycle, exact elapsed archive re
 [6] KyrellosAyman. 2026. [Pi Local releases](https://github.com/KyrellosAyman/pi-local/releases), [v0.1.3 fixtures and results](https://github.com/KyrellosAyman/pi-local/blob/v0.1.3/research/evidence/2026-11-22.md).
 
 [7] KyrellosAyman. 2026. [v0.1.4 matched results](https://github.com/KyrellosAyman/pi-local/blob/v0.1.4/research/evidence/2026-11-22-follow-up.md). ggml-org and contributors. [Pinned native server completion and prompt-cache documentation](https://github.com/ggml-org/llama.cpp/blob/b12541/tools/server/README.md).
+
+[8] KyrellosAyman. 2026. [v0.1.5 desktop and long-context results](https://github.com/KyrellosAyman/pi-local/blob/v0.1.5/research/evidence/2026-11-22-desktop-performance.md).

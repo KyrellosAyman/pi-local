@@ -11,7 +11,7 @@ from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.pdfgen.canvas import Canvas
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
 HERE = Path(__file__).resolve().parent
@@ -70,6 +70,8 @@ def render(source, destination, version):
             if table is not None:
                 table[-1].append(Paragraph(html, LABEL if parent.tag == "th" else CELL))
             else:
+                if parent.tag == "h3" and token.content == "References and artifacts":
+                    flow.append(PageBreak())
                 flow.append(Paragraph(html, HEADINGS.get(parent.tag, BODY)))
 
     def decorate(page, document):
