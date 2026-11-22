@@ -3,7 +3,7 @@
 
 **KyrellosAyman**
 
-Technical report • Version 0.1.2 • 22 November 2026
+Technical report • Version 0.1.3 • 22 November 2026
 
 ### Abstract
 
@@ -78,6 +78,10 @@ The recovered follow-up supplied 85 more matched desktop requests. Native decode
 
 The installed uncoached S01 ran for 7,321.82 seconds. The 150 matched requests had a median of 22.15 tokens/s at up to 41,275 input tokens. Seventeen fell below 20 and none reached 40. The longest post-tool wait was 171.19 seconds, almost all in compaction and prefill. Tk received the first chunk in about 40 ms. None of 2,087 samples reached joint 95% CPU and RAM.
 
+One fixed long-source text task exposed a separate reply budget error. The stock client sent only one allowed output token at 57,884 and 57,902 input tokens. A reply allowance correction reached the first tools, but the full schema catalog later took the provider input to 77,891 tokens and failed the context limit. A measured request attributed 17,732 tokens to the 43 tool schemas. Pi now consults the authenticated local template and tokenizer for eligible text requests when the estimate allows only one output token. If the full schema catalog still leaves too little room, it offers three direct tools and keeps access to the registered catalog through Codemode.
+
+The final live run reached 61,232 input tokens, matched seven native requests, used one registered file read, and returned all three required codes on one line in 944.57 seconds. No compaction occurred. The median of six near-limit requests was 19.566 tokens/s, three of six fell below 20, and none reached 40. A cached wait after the file tool was 1.22 seconds, while multiple full prompts took about 150 seconds to prepare. None of 263 host samples reached joint 95% CPU and RAM. This result establishes task completion in the tested text case. The tokenizer check excludes image and audio inputs.
+
 ## 5. Recovery and accuracy results
 
 ### 5.1 Elapsed archive and productive continuity
@@ -118,6 +122,14 @@ At the 110-minute cutoff, uncoached S01 in ordinary Pi scored 85.4785% and prese
 A focused installed repair produced a non-silent WAV, a strict UTF-8 HTML receipt and a successful PowerShell import without cache files. Offline speech recognition recovered the exact five-word reference. The 863.56-second desktop run added prose around the requested exact answer. In a separate uncoached retest, all 120 booking rows and the revised three-day schedule passed. At 110 minutes the score was 85.1485%, with all 44 inputs preserved. The days field had the wrong type and the validator, dashboard and audiovisual handoff were absent.
 
 The guided Field Kit repair produced an APK whose unsigned entries matched an independent offline rebuild. On Android API 35 at 320 × 640 and 130% text, it rejected invalid quantities without changing inventory, preserved a checkout across a force stop, and passed the return cancellation and confirmation checks. Wi-Fi stayed off and the package requested no internet permission. This evidence covers the guided repair and the tested interface flows.
+
+### 5.4 Clarification and first-plan review
+
+Pi uses its existing RPC input channel for clarification. Clear prompts can proceed without a question. A material ambiguity can produce one question, with at most two in the same task. Three buttons submit their answer with one click and the first is marked Recommended. The fourth row accepts custom text. Pi saves the question before display and the answer before continuing. A live control asked no question, another accepted one typed answer, and a third accepted one button click and used the selected audience. An earlier live version stored the choice but asked again. Including the saved choice as user input corrected that case without duplicating the original prompt. A controlled restart fixture tested the unanswered card and the interval after committing an answer but before RPC acknowledgment.
+
+The first actionable draft becomes a pending plan. The same local model makes a constrained review pass using the request, clarified brief, and draft. Pi blocks work tools while review is pending, commits one accepted plan, and applies later progress updates directly. It assigns the first reviewed step in progress and preserves already declared checkpoint paths. One earlier attempt needed a status correction. A later attempt reported missing steps but returned the broad draft unchanged. The final implementation assigns statuses itself and rejects an unchanged plan with unresolved findings.
+
+In the final live test, the reviewer converted one broad step into reading and hashing the original, copying it byte for byte, and comparing both files. It committed the plan on one review call before any work tools ran. The task closed all three steps. Independent grading matched the two 76-byte files and the original fixture. Controlled restarts before and after review recovered one committed plan and no repeat review after plan updates. The tests establish those behaviors on the specified workloads. Broader semantic quality remains a separate evaluation.
 
 ## 6. Standalone, audio, and video findings
 
@@ -175,4 +187,4 @@ Pi has demonstrated a standalone local model lifecycle, exact elapsed archive re
 
 [5] Wan-Video and contributors. [Wan2.2 reference code and model instructions](https://github.com/Wan-Video/Wan2.2).
 
-[6] KyrellosAyman. 2026. [Pi Local v0.1.1 software and paper](https://github.com/KyrellosAyman/pi-local/releases/tag/v0.1.1), [reproduction guide](https://github.com/KyrellosAyman/pi-local/blob/v0.1.1/docs/reproducibility.md), and [public result ledger](https://github.com/KyrellosAyman/pi-local/blob/v0.1.1/research/evidence/2026-11-20.md).
+[6] KyrellosAyman. 2026. [Pi Local releases](https://github.com/KyrellosAyman/pi-local/releases), [v0.1.3 fixtures and results](https://github.com/KyrellosAyman/pi-local/blob/v0.1.3/research/evidence/2026-11-22.md).

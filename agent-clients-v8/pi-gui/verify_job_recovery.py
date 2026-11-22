@@ -33,6 +33,8 @@ skill_route = [('find_skills', {'query': 'general-task'}),
                ('use_skill', {'name': 'general-task', 'reason': 'General file work.'})]
 bootstrap = [('prepare_prompt', {'brief': OBJECTIVE, 'checks': ['Check both files.']}),
              ('update_plan', {'steps': [{**step, 'status': 'pending'}, {**sealed_step, 'status': 'in_progress'}]}),
+             ('review_initial_plan', {'steps': [step]}),
+             ('review_initial_plan', {'steps': [{key: value for key, value in sealed_step.items() if key != 'status'}, step]}),
              *skill_route]
 original = [*bootstrap, ('run_script', {'path': 'proof.py'}), ('write', FIRST), ('write', MANIFEST),
             ('update_plan', {'steps': [{**step, 'status': 'in_progress'}, sealed_step]}), *skill_route]
@@ -59,7 +61,7 @@ class Handler(BaseHTTPRequestHandler):
                          'tools': [tool['function']['name'] for tool in body.get('tools', [])]})
         script = original if mode == 'original' else resumed
         tool = script[index] if mode != 'summary' and index < len(script) else None
-        tokens = 49000 if mode == 'original' and index == 5 else 3200
+        tokens = 49000 if mode == 'original' and index == len(bootstrap) + 1 else 3200
         base = dict(id='recovery-fixture', object='chat.completion.chunk', created=int(time.time()), model=MODEL)
         if tool:
             name, arguments = tool
@@ -219,6 +221,7 @@ def main():
             assert (workspace / SECOND['path']).read_bytes() == SECOND['content'].encode()
             assert any('Recovery refused to repeat write' in json.dumps(request) for request in requests)
             assert any('This file belongs to a completed checkpoint' in json.dumps(request) for request in requests)
+            assert any('Keep the declared checkpoint path in the reviewed plan' in json.dumps(request) for request in requests)
             assert sealed.stat().st_mtime_ns == sealed_timestamp and sealed.read_bytes() == SEALED['content'].encode()
             assert Jobs(state).current() is None
             assert close_requested == [True]
@@ -243,6 +246,7 @@ def main():
                               'first_resumed_read_used_the_saved_route': True,
                               'duplicate_write_refused': True, 'actual_files_match': True,
                               'checkpointed_edit_refused': True,
+                              'checkpoint_omission_by_reviewer_refused': True,
                               'omitted_completed_step_and_proof_retained': True,
                               'background_close_after_archiving': True,
                               'checkpoint_phase': proof['phase'], 'request_modes': [r['mode'] for r in requests]}, indent=2))

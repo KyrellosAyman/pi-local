@@ -7,6 +7,7 @@
 | 0.1.0 | Public Windows desktop snapshot, launcher and workflow fixtures | [Source release](https://github.com/KyrellosAyman/pi-local/releases/tag/v0.1.0) |
 | 0.1.1 | Research report, pinned public asset setup, local-only defaults and released synthetic reproductions | [Research release](https://github.com/KyrellosAyman/pi-local/releases/tag/v0.1.1) |
 | 0.1.2 | Offline audio setup, protected checkpoint fixtures, Windows chat history recovery and expanded trial evidence | [Research release](https://github.com/KyrellosAyman/pi-local/releases/tag/v0.1.2) |
+| 0.1.3 | Clickable clarification, first-plan review with recovery, and near-64k text workflow evidence | [Research release](https://github.com/KyrellosAyman/pi-local/releases/tag/v0.1.3) |
 
 ## Update the record and publish
 

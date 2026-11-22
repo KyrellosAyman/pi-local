@@ -2,7 +2,7 @@
 
 Pi Local is a Windows desktop harness for local model inference, tool use, and resumable jobs. Pi starts its own model service. The default release uses authenticated loopback, local workspace tools, and a checkout-specific state directory. It needs no API account or API key from the user.
 
-[Research paper, v0.1.2](research/pi-local-v0.1.2.pdf) · [Reproduction guide](docs/reproducibility.md) · [Evaluation ledger](research/evidence/2026-11-21.md) · [Releases](https://github.com/KyrellosAyman/pi-local/releases)
+[Research paper, v0.1.3](research/pi-local-v0.1.3.pdf) · [Reproduction guide](docs/reproducibility.md) · [Evaluation ledger](research/evidence/2026-11-22.md) · [Releases](https://github.com/KyrellosAyman/pi-local/releases)
 
 ## Install on Windows
 
@@ -20,6 +20,8 @@ For portable Python, add `-Python 'C:\path\to\python\python.exe'` to the setup c
 The measured GPU was an RTX 5060 Ti with 16 GB VRAM and 63.8 GiB host RAM. Use a compatible NVIDIA driver and leave approximately 22 GB of disk space for one profile and its extracted runtime. Fit and speed vary with hardware and other running applications. Setup writes configuration and installs dependencies. The model starts when Pi sends its first prompt. Port 1235 must be free for this checkout's service.
 
 In Pi, choose a workspace and send a short prompt. By default this release keeps chats, recoverable jobs and its starter workspace under the ignored `.local/` directory. The settings panel can unload an idle model. Use launcher status and stop commands from the reproduction guide when checking ownership.
+
+When a missing choice materially affects the request, Pi shows three clickable answers, with its recommendation first, and a fourth row for a custom answer. Before starting planned tool work, Pi reviews the initial draft for coverage and adds missing implementation or verification steps.
 
 For cached downloads, an offline setup path, the original no-MTP profile, native smoke checks, optional media and desktop drivers, and the synthetic benchmark, see the [reproduction guide](docs/reproducibility.md).
 

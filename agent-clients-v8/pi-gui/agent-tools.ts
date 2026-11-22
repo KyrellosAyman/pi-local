@@ -7,6 +7,7 @@ import { Type } from "typebox";
 import { registerSkillWorkflow } from "./skill-workflow.ts";
 import { POWERSHELL_TIMEOUT_SECONDS, registerStallRecovery } from "./stall-recovery.ts";
 import { registerJobRecovery, verifyStageCheckpoint } from "./job-recovery.ts";
+import { registerInitialPlanReview } from "./initial-plan-review.ts";
 
 const maxPlanSteps = 12;
 const step = Type.Object({
@@ -94,50 +95,64 @@ export default function agentTools(pi) {
 	});
 	const pauseJob = registerJobRecovery(pi);
 
+	function checkPlan(steps) {
+		const ids = new Set(steps.map((item) => item.id));
+		if (ids.size !== steps.length || steps.filter((item) => item.status === "in_progress").length > 1) {
+			throw new Error("Use unique step IDs and at most one in-progress step.");
+		}
+		return ids;
+	}
+	function commitPlan(steps, reason, initialReview, ctx) {
+		const proposedIds = checkPlan(steps);
+		const updatedSteps = [...steps];
+		for (const [index, item] of previousSteps.entries()) {
+			if (item.status === "completed" && !proposedIds.has(item.id)) updatedSteps.splice(index, 0, item);
+		}
+		if (updatedSteps.length > maxPlanSteps) {
+			throw new Error(`Use at most ${maxPlanSteps} steps including saved completed steps.`);
+		}
+		const verified = new Map();
+		const plan = workflow.setPlan(updatedSteps.map(({ id, title, skillQuery, status, checkpoint }) => {
+			const previous = previousSteps.find((item) => item.id === id);
+			if (checkpoint && previous?.checkpoint && checkpoint !== previous.checkpoint) {
+				throw new Error("Keep the declared checkpoint path for stage " + id + ": " + previous.checkpoint);
+			}
+			if (status === "completed" && previous?.status === "completed") return previous;
+			const path = previous?.checkpoint ?? checkpoint;
+			if (status === "completed" && path) verified.set(id, verifyStageCheckpoint(ctx.cwd, path));
+			return { id, title, skillQuery, status, ...(path ? { checkpoint: path } : {}) };
+		}));
+		const note = plan.reopened ? "Pi kept " + plan.reopened + " in progress because it still needed a skill route." : "";
+		if (reason && !note) {
+			planReason = reason;
+			recordReview(reason);
+		}
+		previousSteps = plan.steps.map((item) => item.status === "completed" && verified.has(item.id)
+			? { ...item, checkpointProof: verified.get(item.id) } : item);
+		planned = true;
+		const details = { steps: previousSteps, reason: note || planReason, awaitingSkill: plan.routing, reopenedStep: plan.reopened,
+			updatedAt: new Date().toISOString(), ...(initialReview ? { initialReview } : {}) };
+		pi.appendEntry("gui-plan", details);
+		const receipts = previousSteps.filter((item) => item.status === "completed" && verified.has(item.id))
+			.map((item) => "Verified " + item.checkpoint + " at " + item.checkpointProof.verifiedAt + ".");
+		const finalFormat = previousSteps.every((item) => item.status === "completed") ?
+			"Follow the user's exact final answer format. If the user asked for one line, put only the requested answer on that line and omit process or verification notes." : "";
+		return reply([initialReview ? "Initial review complete. Reviewed plan recorded." : "Plan recorded.",
+			note, plan.nextSkillAction, ...receipts, finalFormat].filter(Boolean).join(" "), details);
+	}
+	const draftInitialPlan = registerInitialPlanReview(pi, workflow.allowed, step, commitPlan);
 	pi.registerTool({
 		name: "update_plan",
 		label: "Update plan",
 		description: "Record the current plan and explain changes briefly. Previously completed steps carry forward. Use new IDs for new work or mark a finished step in progress to reopen it. Declare a stage's checkpoint path when the user requires one.",
 		parameters: Type.Object({ steps: Type.Array(step, { minItems: 1, maxItems: maxPlanSteps }), reason: Type.Optional(Type.String({ maxLength: 300 })) }),
 		async execute(_id, { steps, reason }, _signal, _onUpdate, ctx) {
-			const proposedIds = new Set(steps.map((item) => item.id));
-			if (proposedIds.size !== steps.length ||
-				steps.filter((item) => item.status === "in_progress").length > 1) {
-				throw new Error("Use unique step IDs and at most one in-progress step.");
+			if (!planned) {
+				checkPlan(steps);
+				const draft = draftInitialPlan(steps);
+				if (draft) return reply("Initial plan recorded for review. Wait for the review before starting work.", draft);
 			}
-			const updatedSteps = [...steps];
-			for (const [index, item] of previousSteps.entries()) {
-				if (item.status === "completed" && !proposedIds.has(item.id)) updatedSteps.splice(index, 0, item);
-			}
-			if (updatedSteps.length > maxPlanSteps) {
-				throw new Error(`Use at most ${maxPlanSteps} steps including saved completed steps.`);
-			}
-			const verified = new Map();
-			const plan = workflow.setPlan(updatedSteps.map(({ id, title, skillQuery, status, checkpoint }) => {
-				const previous = previousSteps.find((item) => item.id === id);
-				if (checkpoint && previous?.checkpoint && checkpoint !== previous.checkpoint) {
-					throw new Error("Keep the declared checkpoint path for stage " + id + ": " + previous.checkpoint);
-				}
-				if (status === "completed" && previous?.status === "completed") return previous;
-				const path = previous?.checkpoint ?? checkpoint;
-				if (status === "completed" && path) verified.set(id, verifyStageCheckpoint(ctx.cwd, path));
-				return { id, title, skillQuery, status, ...(path ? { checkpoint: path } : {}) };
-			}));
-			const note = plan.reopened ? "Pi kept " + plan.reopened + " in progress because it still needed a skill route." : "";
-			if (reason && !note) {
-				planReason = reason;
-				recordReview(reason);
-			}
-			previousSteps = plan.steps.map((item) => item.status === "completed" && verified.has(item.id)
-				? { ...item, checkpointProof: verified.get(item.id) } : item);
-			planned = true;
-			const details = { steps: previousSteps, reason: note || planReason, awaitingSkill: plan.routing, reopenedStep: plan.reopened,
-				updatedAt: new Date().toISOString() };
-			pi.appendEntry("gui-plan", details);
-			const receipts = previousSteps.filter((item) => item.status === "completed" && verified.has(item.id))
-				.map((item) => "Verified " + item.checkpoint + " at " + item.checkpointProof.verifiedAt + ".");
-			return reply(["Plan recorded.", note, plan.nextSkillAction, ...receipts]
-				.filter(Boolean).join(" "), details);
+			return commitPlan(steps, reason, undefined, ctx);
 		},
 	});
 

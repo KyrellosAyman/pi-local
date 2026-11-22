@@ -89,6 +89,8 @@ def command(state, browser_only=False, thinking='medium', calibration=False, *, 
     runtime = runtime_config()
     tools = ['mcp__windows__*' if browser_only else TOOLS, *PNG_TOOLS]
     extensions = ['--extension', str(HERE / 'agent-tools.ts')]
+    if not (browser_only or calibration):
+        extensions += ['--extension', str(HERE / 'near64-answer-room.ts')]
     if concise_checkpoints and not (browser_only or calibration):
         extensions += ['--extension', str(HERE / 'compact-checkpoint.ts')]
     if not calibration:
