@@ -29,6 +29,7 @@ def environment(base, credential):
         'TEMP': str(base / 'tmp'), 'TMP': str(base / 'tmp'),
         'PI_CODING_AGENT_DIR': str(base / 'profile'),
         'PI_CODING_AGENT_SESSION_DIR': str(base / 'sessions'),
+        'PYTHONDONTWRITEBYTECODE': '1',
         'PI_OFFLINE': '1', 'PI_SKIP_VERSION_CHECK': '1', 'PI_TELEMETRY': '0',
         'PI_T03_API_KEY': credential, 'NO_PROXY': '127.0.0.1,localhost',
     })

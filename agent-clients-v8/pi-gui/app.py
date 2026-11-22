@@ -7,6 +7,7 @@ import msvcrt
 import os
 from pathlib import Path
 from queue import Empty, SimpleQueue
+from subprocess import SubprocessError
 import threading
 import time
 import tkinter as tk
@@ -21,7 +22,7 @@ from win32com.client import Dispatch
 
 import pi_backend as backend
 from job_recovery import Jobs, TERMINAL
-from inspect_input import IMAGE_EXT, picture
+from inspect_input import AV_EXT, IMAGE_EXT, audio_excerpt, picture
 from runtime_metrics import Metrics, PostToolLatency
 import context_switch
 
@@ -70,6 +71,44 @@ SMALL = ('Segoe UI', 10)
 MONO = ('Cascadia Mono', 10)
 
 
+def format_audio_evidence(filename, result):
+    def level(value, relative=False):
+        if value is None:
+            return '—' if relative else 'digital silence'
+        return f'{value:+.2f} dB' if relative else f'{value:.2f} dBFS'
+
+    def reference(channels):
+        return ', '.join(f'channel {channel}' for channel in channels) or 'none (digital silence)'
+
+    def time_label(value):
+        return f'{value:.6f}'.rstrip('0').rstrip('.')
+
+    start = result['start_seconds']
+    source = f"channel {result['analysis_channel']}" if 'analysis_channel' in result else 'the mono mix'
+    lines = [filename, f"{time_label(start)}–{time_label(result['end_seconds'])} s  ·  Estimates use {source}.",
+             '', 'Decoded channel measurements',
+             f"Peak reference: {reference(result['peak_reference_channels'])}",
+             f"RMS reference: {reference(result['rms_reference_channels'])}"]
+    for channel, span in zip(result['channels'], result['decoded_nonzero_spans_seconds_from_excerpt_start'], strict=True):
+        peak, rms = (level(channel[f'{kind}_dbfs']) for kind in ('peak', 'rms'))
+        peak_delta, rms_delta = (level(channel[f'{kind}_relative_to_loudest_channel_db'], relative=True)
+                                 for kind in ('peak', 'rms'))
+        lines.append(f"Channel {channel['channel']}  Peak {peak} ({peak_delta})  ·  RMS {rms} ({rms_delta})")
+        if span:
+            first, end = (time_label(start + offset) for offset in span)
+            lines.append(f'    Decoded nonzero envelope {first}–{end} s (exclusive end)')
+    if 'decoded_stereo_channels_identical' in result:
+        difference = 'identical' if result['decoded_stereo_channels_identical'] else 'different'
+        lines.append(f'Decoded stereo waveforms are {difference} in this window.')
+    lines.extend(('', 'Recording setup: unknown from the audio.', '',
+                  'Sound candidates (peak classifier scores)'))
+    lines.extend(f"{hint['label']}  {hint['score']:.4f}" for hint in result['sound_event_hints'])
+    if not result['sound_event_hints']:
+        lines.append('No candidates returned.')
+    lines.extend(('', 'Estimated transcript', (result.get('speech_text') or '').strip() or 'No words returned.'))
+    return '\n'.join(lines)
+
+
 class App:
     def __init__(self, root, server, workspace, state, watch=None, browser_only=False, evidence=None,
                  recover_jobs=False, allow_wide_context=False, latency_trace=None, exit_after_job=False):
@@ -106,6 +145,7 @@ class App:
         self.plan_steps = []
         self.plan_reason = ''
         self.attachments = []
+        self.audio_report_window = None
         self.history = []
         self.visible_chats = []
         self.history_rows = {}
@@ -379,6 +419,8 @@ class App:
         self.attach_button.pack(side='left')
         self.clear_button = self._button(actions, 'Clear', self.clear_attachments)
         self.clear_button.pack(side='left', padx=5)
+        if not (self.browser_only or self.evidence or self.watch):
+            self._button(actions, 'Audio report', self.open_audio_report).pack(side='left')
         self.chat_activity = tk.Label(actions, textvariable=self.activity_indicator, bg=BG, fg=ACCENT,
                                       anchor='w', width=1, font=SMALL)
         self.chat_activity.pack(side='left', fill='x', expand=True, padx=4)
@@ -591,6 +633,9 @@ class App:
             self._show_history()
         elif kind == 'local_warning' and e.get('text'):
             self._write(self.chat, '\n' + e['text'] + '\n', 'error')
+        elif (kind == 'extension_error' and self.job and self.recovery_wait
+              and e.get('extensionPath') == 'command:local-pi-recover'):
+            self._pause_recovery(e.get('error') or 'Pi refused the recovery command.')
         elif kind == 'native_backend':
             self.starting_backend = False
             retry = e['retry']
@@ -934,15 +979,20 @@ class App:
         style = []
         lists = []
         table = None
+        runs = []
+
+        def add(value, tags):
+            runs.extend((value, tags))
+
         for token in MARKDOWN.parse(text):
             kind = token.type
             if kind in ('fence', 'code_block'):
-                self._write(self.chat, token.content + ('\n' if not token.content.endswith('\n') else ''), 'code')
+                add(token.content + ('\n' if not token.content.endswith('\n') else ''), 'code')
             elif kind in ('heading_open', 'blockquote_open'):
                 style.append('heading' if kind == 'heading_open' else 'quote')
             elif kind in ('heading_close', 'blockquote_close'):
                 if kind == 'heading_close':
-                    self._write(self.chat, '\n', 'heading')
+                    add('\n', 'heading')
                 style.pop()
             elif kind in ('bullet_list_open', 'ordered_list_open'):
                 lists.append(None if kind == 'bullet_list_open' else int(token.attrGet('start') or 1))
@@ -950,7 +1000,7 @@ class App:
                 lists.pop()
             elif kind == 'list_item_open':
                 number = lists[-1]
-                self._write(self.chat, '  ' * (len(lists) - 1) + ('• ' if number is None else f'{number}. '), 'answer')
+                add('  ' * (len(lists) - 1) + ('• ' if number is None else f'{number}. '), 'answer')
                 if number is not None:
                     lists[-1] += 1
             elif kind == 'table_open':
@@ -960,19 +1010,27 @@ class App:
             elif kind == 'table_close':
                 widths = [max(map(len, column)) for column in zip(*table)]
                 for index, row in enumerate(table):
-                    self._write(self.chat, ' │ '.join(cell.ljust(width) for cell, width in zip(row, widths)) + '\n', 'table')
+                    add(' │ '.join(cell.ljust(width) for cell, width in zip(row, widths)) + '\n', 'table')
                     if index == 0:
-                        self._write(self.chat, '─┼─'.join('─' * width for width in widths) + '\n', 'table')
+                        add('─┼─'.join('─' * width for width in widths) + '\n', 'table')
                 table = None
             elif kind == 'inline':
                 if table is not None:
                     table[-1].append(''.join(c.content for c in token.children if c.type in ('text', 'code_inline', 'image')))
                 else:
-                    self._format_inline(token.children, tuple(style) or ('answer',), links)
+                    self._format_inline(token.children, tuple(style) or ('answer',), links, add)
             elif kind in ('paragraph_close', 'hr'):
-                self._write(self.chat, '\n', tuple(style) or ('answer',))
+                add('\n', tuple(style) or ('answer',))
+        if runs:
+            self.chat.configure(state='normal')
+            try:
+                self.chat.insert('end', *runs)
+                if self.chat_following:
+                    self.chat.yview('end')
+            finally:
+                self.chat.configure(state='disabled')
 
-    def _format_inline(self, pieces, tags, links):
+    def _format_inline(self, pieces, tags, links, add):
         inline = {'strong_open': 'strong', 'em_open': 'em', 's_open': 'strike'}
         active = []
         link = ()
@@ -997,7 +1055,7 @@ class App:
             elif part.type in ('text', 'code_inline', 'image', 'softbreak', 'hardbreak'):
                 value = {'softbreak': ' ', 'hardbreak': '\n'}.get(part.type, part.content)
                 decoration = ('inline_code',) if part.type == 'code_inline' else ()
-                self._write(self.chat, value, (*tags, *active, *decoration, *link))
+                add(value, (*tags, *active, *decoration, *link))
 
     def _add_reply_actions(self, text):
         for label, action in (('Copy reply', self._copy_text), ('Read aloud', self._toggle_read_aloud)):
@@ -1523,6 +1581,71 @@ class App:
         except OSError as exc:
             self.thinking_label.set(self.thinking.title())
             messagebox.showerror('Settings', str(exc), parent=self.settings_window)
+
+    def open_audio_report(self):
+        if self.audio_report_window and self.audio_report_window.winfo_exists():
+            self.audio_report_window.lift()
+            return
+        filename = filedialog.askopenfilename(parent=self.root, title='Choose local audio or video',
+                                              initialdir=self.workspace,
+                                              filetypes=[('Audio and video', ' '.join('*' + ext for ext in sorted(AV_EXT)))])
+        if not filename:
+            return
+        path = Path(filename)
+        palette = THEMES[self.theme]
+        dialog = self.audio_report_window = tk.Toplevel(self.root, bg=palette[PANEL])
+        dialog.title('Pi Audio report')
+        dialog.transient(self.root)
+        dialog.geometry('740x560')
+        dialog.minsize(540, 360)
+        tk.Label(dialog, text=path.name, bg=palette[PANEL], fg=palette[TEXT], font=BODY).pack(pady=(12, 3))
+        options = tk.Frame(dialog, bg=palette[PANEL])
+        options.pack(pady=5)
+        fields = {}
+        for name, value in (('Start (s)', '0'), ('Length (s)', '30'), ('Channel (optional)', '')):
+            tk.Label(options, text=name, bg=palette[PANEL], fg=palette[TEXT], font=SMALL).pack(side='left', padx=5)
+            fields[name] = tk.StringVar(dialog, value)
+            ttk.Entry(options, textvariable=fields[name], width=7).pack(side='left')
+        output = self._scrolled_text(dialog, BODY, 18, surface=palette[PANEL])
+
+        def analyze():
+            try:
+                start, duration = (float(fields[name].get()) for name in ('Start (s)', 'Length (s)'))
+                channel = fields['Channel (optional)'].get().strip()
+                channel = int(channel) if channel else None
+            except ValueError:
+                self._write(output, 'Enter seconds for start and length, and a whole channel number if needed.', replace=True)
+                return
+            button.state(['disabled'])
+            self._write(output, 'Analyzing locally…', replace=True)
+            result = SimpleQueue()
+
+            def worker():
+                try:
+                    measurements = audio_excerpt(path.resolve(strict=True), start=start, duration=duration, channel=channel)
+                    result.put(format_audio_evidence(path.name, measurements))
+                except (ImportError, OSError, ValueError, KeyError, RuntimeError, SubprocessError) as error:
+                    result.put(f'Audio analysis failed. {error}')
+
+            def poll():
+                if not dialog.winfo_exists():
+                    return
+                try:
+                    text = result.get_nowait()
+                except Empty:
+                    self.root.after(100, poll)
+                    return
+                self._write(output, text, replace=True)
+                output.yview_moveto(0)
+                button.state(['!disabled'])
+
+            threading.Thread(target=worker, daemon=True).start()
+            self.root.after(100, poll)
+
+        button = self._button(options, 'Analyze', analyze)
+        button.pack(side='left', padx=8)
+        dialog.bind('<Escape>', lambda _event: dialog.destroy())
+        analyze()
 
     def attach(self):
         names = filedialog.askopenfilenames(parent=self.root, title='Attach local files', initialdir=self.workspace,

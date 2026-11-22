@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT / 'native-qwen'))
 from launcher import Launcher
 from context_profile import OPTIMIZED_NARROW_SHA256
 from pi_runtime import CLI, MODEL, environment, profile, runtime_config
-from job_recovery import atomic_json
+from job_recovery import atomic_json, session_file_path
 
 DESKTOP_TOOLS = ('list_windows', 'get_window_state', 'click', 'set_value',
                  'type_text', 'press_key', 'hotkey', 'scroll')
@@ -193,7 +193,8 @@ def saved_chats(state):
     chats = []
     for path in (state / 'sessions').rglob('*.jsonl'):
         try:
-            with path.open(encoding='utf-8') as stream:
+            readable = session_file_path(path)
+            with readable.open(encoding='utf-8') as stream:
                 header = json.loads(stream.readline())
                 if header.get('type') != 'session' or not header.get('cwd'):
                     continue
@@ -213,7 +214,7 @@ def saved_chats(state):
                             item.get('text', '') for item in parts if item.get('type') == 'text')
                         fallback = ' '.join(text.split())[:120]
                 if title or fallback:
-                    chats.append((path.stat().st_mtime, title or fallback, path, Path(header['cwd'])))
+                    chats.append((readable.stat().st_mtime, title or fallback, path, Path(header['cwd'])))
         except (OSError, UnicodeError, ValueError):
             continue
     return sorted(chats, key=lambda row: row[0], reverse=True)

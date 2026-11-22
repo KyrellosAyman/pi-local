@@ -4,7 +4,7 @@ title: "Pi Local: A Desktop Harness for Local Inference and Recoverable Agent Wo
 type: software
 authors:
   - name: KyrellosAyman
-version: "0.1.1"
-date-released: "2026-11-20"
+version: "0.1.2"
+date-released: "2026-11-22"
 repository-code: "https://github.com/KyrellosAyman/pi-local"
-url: "https://github.com/KyrellosAyman/pi-local/releases/tag/v0.1.1"
+url: "https://github.com/KyrellosAyman/pi-local/releases/tag/v0.1.2"

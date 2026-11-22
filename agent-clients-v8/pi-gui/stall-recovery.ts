@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { detectSupportedImageMimeTypeFromFile } from "@earendil-works/pi-coding-agent";
 
+export const POWERSHELL_TIMEOUT_SECONDS = 120;
+
 const checkTools = new Set(["powershell", "bash", "run_script", "read", "grep", "find", "ls", "read_website", "read_document"]);
 const visualTools = new Set(["view_image_file", "sample_video"]);
 const viewsPerReview = 8;
@@ -9,6 +11,7 @@ const reviewMessage = "Record what the inspected frames established and what spe
 const message = "The recent checks returned the same evidence. Change the verification method or consult an independent reference. If the stage is blocked, report the missing evidence and preserve partial files.";
 const failureMessage = "The same diagnostic recurred across attempts. Verify the actual deliverable in its required representation against an independent reference, and change the verification method before retrying. If the stage is blocked, preserve partial files and report the missing evidence.";
 const scriptRecovery = "Use write to save a standalone script and run_script to run it by itself. Keep source fixture data in a separate file. Verify the actual deliverable against an independent reference before retrying the failed check.";
+const inputShapeRecovery = "Compare the caller's input shape with the function's declared contract. Reproduce the failure with the smallest input, and rerun its earlier checks if you change the function.";
 const inlineScript = /(?:^|[;\s])(?:node|python)(?:\.exe)?\s+(?:-e|-c|--eval)(?:\s|$)/i;
 const fingerprint = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -35,6 +38,28 @@ export function registerStallRecovery(pi, currentStage, pauseJob) {
 	});
 	// A frame removed by compaction may be needed again, but the review batch still counts.
 	pi.on("session_compact", () => visualHashes.clear());
+	pi.on("context", ({ messages }, ctx) => {
+		const isTurn = (entry) => entry.role === "assistant" || entry.role === "user";
+		const summary = messages.findLastIndex((entry) => entry.role === "compactionSummary");
+		const visible = messages.findLastIndex(isTurn);
+		const history = summary >= 0 && visible < summary
+			? ctx?.sessionManager.getBranch().filter((entry) => entry.type === "message")
+				.map((entry) => entry.message) ?? messages : messages;
+		const index = history === messages ? visible : history.findLastIndex(isTurn);
+		const turn = history[index];
+		if (turn?.role !== "assistant" || turn.stopReason !== "length") return;
+		const refused = new Set(turn.content.filter((part) =>
+			part.type === "toolCall" && ["write", "edit"].includes(part.name)).map((part) => part.id));
+		if (!refused.size) return;
+		const isRefusal = (entry) => entry.role === "toolResult" && entry.isError && refused.has(entry.toolCallId) &&
+			entry.content.some((part) => part.type === "text" && part.text.includes("was not executed: the response hit the output token limit"));
+		if (!history.slice(index + 1).some(isRefusal)) return;
+		const text = "Check the current file, then use smaller complete write or edit calls. Preserve verified bytes and read back each change before recording the checkpoint.";
+		if (messages.some(isRefusal)) return { messages: messages.map((entry) => isRefusal(entry)
+			? { ...entry, content: [...entry.content, { type: "text", text }] } : entry) };
+		if (summary >= 0) return { messages: messages.map((entry, at) => at === summary
+			? { ...entry, summary: entry.summary + "\n\nThe latest oversized file tool call was not executed. " + text } : entry) };
+	});
 	pi.on("before_provider_request", ({ payload }) => {
 		const review = reviews.get(currentStage());
 		if (!review?.refusals || ![undefined, "auto"].includes(payload?.tool_choice) ||
@@ -63,8 +88,13 @@ export function registerStallRecovery(pi, currentStage, pauseJob) {
 			ctx.abort();
 		}
 	});
-	const key = (event) => JSON.stringify([currentStage(), event.toolName,
-		Object.entries(event.input ?? {}).sort(([a], [b]) => a.localeCompare(b))]);
+	const key = (event) => {
+		const input = event.input ?? {};
+		const effective = event.toolName === "powershell" && input.timeout === undefined
+			? { ...input, timeout: POWERSHELL_TIMEOUT_SECONDS } : input;
+		return JSON.stringify([currentStage(), event.toolName,
+			Object.entries(effective).sort(([a], [b]) => a.localeCompare(b))]);
+	};
 
 	function refuseVisual(event, stage, review) {
 		const terminate = ++review.refusals >= 3;
@@ -156,8 +186,11 @@ export function registerStallRecovery(pi, currentStage, pauseJob) {
 		const repeatsCompound = event.toolName === "powershell" && repeatsFailure && (runs?.length ?? 0) > 1;
 		if (parserFailure) shellRecovery.add(currentStage());
 		if (parserFailure || repeatsCompound) failedCommands.add(id);
-		if (count < 2 && !repeatsFailure && !parserFailure) return;
-		const guidance = parserFailure || repeatsCompound ? scriptRecovery : repeatsFailure ? failureMessage : message;
+		const firstInputShapeError = (event.toolName === "run_script" || event.toolName === "powershell") && !repeatsFailure &&
+			/^KeyError:/.test(diagnostic || "") && /^Traceback \(most recent call last\):\r?$/m.test(output);
+		if (count < 2 && !repeatsFailure && !parserFailure && !firstInputShapeError) return;
+		const guidance = firstInputShapeError ? inputShapeRecovery :
+			parserFailure || repeatsCompound ? scriptRecovery : repeatsFailure ? failureMessage : message;
 		pi.appendEntry("gui-stall", { stage: currentStage(), tool: event.toolName,
 			toolCallId: event.toolCallId, action: "change_approach", repeatedDiagnostic: repeatsFailure || undefined });
 		return { content: [...event.content, { type: "text", text: guidance }],

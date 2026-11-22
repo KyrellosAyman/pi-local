@@ -34,6 +34,15 @@ stage = "verify";
 assert.equal(call(command), undefined);
 assert.ok(receipts.some((receipt) => receipt.action === "terminate"));
 
+stage = "timeout-default";
+const withDefault = { ...command, input: { ...command.input, timeout: 120 } };
+assert.equal(result(stale), undefined);
+assert.equal(call(withDefault), undefined);
+assert.match(result(stale).details.stallRecovery, /independent reference/);
+assert.match(call(withDefault)?.reason ?? "", /Repeated check refused/);
+assert.equal(call({ ...command, input: { ...command.input, timeout: 180 } }), undefined);
+stage = "verify";
+
 const check = { ...command, input: { command: "node check.js" } };
 const wrapped = { ...check, input: { command: "node check.js 2>&1 | Out-String" } };
 const failed = (event, output) => ({ ...event, isError: true, content: [{ type: "text", text: output }] });
@@ -151,3 +160,26 @@ assert.ok(withheld.isError && withheld.content.every((part) => part.type === "te
 recordReview("Frame 60 is the last clean hold. Check the new release on the revised clip.");
 assert.equal(call(readImage("candidate")), undefined);
 console.log("Repeated checks redirect, batched visual reviews require a progress update, and unique evidence proceeds.");
+
+stage = "script-input-shape";
+const badInput = { ...standalone, toolCallId: "dashboard-input", input: { path: "build_dashboard.py" } };
+const traceback = "Script failed (1).\nTraceback (most recent call last):\n  File \"validate.py\", line 2, in validate\n    row[\"duration_min\"]\nKeyError: 'duration_min'";
+const badResult = failed(badInput, traceback);
+const note = result(badResult);
+assert.ok(note, "The first Python mapping error should explain how to check the input boundary.");
+assert.deepEqual(note.content[0], badResult.content[0]);
+assert.match(note.content.at(-1).text, /caller's input shape.*declared contract/);
+assert.match(note.content.at(-1).text, /rerun its earlier checks/i);
+assert.match(result(badResult).content.at(-1).text, /same diagnostic recurred/i);
+stage = "script-output-control";
+assert.equal(result(failed(badInput, "Script unrelated: KeyError: 'duration_min'")), undefined);
+assert.equal(result(failed(badInput, traceback.replace("KeyError", "ValueError"))), undefined);
+assert.equal(result({ ...badResult, isError: false }), undefined);
+assert.equal(result(failed({ ...badInput, toolName: "read" }, traceback)), undefined);
+console.log("The first Python mapping error preserves the original tool result and suggests checking the caller.");
+
+stage = "script-input-through-powershell";
+const shellInput = { ...command, toolCallId: "dashboard-input-shell", input: { command: "python build_dashboard.py" } };
+const shellNote = result(failed(shellInput, traceback));
+assert.ok(shellNote, "The real PowerShell route produced the same Python mapping error.");
+assert.match(shellNote.content.at(-1).text, /caller's input shape.*declared contract/);

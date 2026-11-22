@@ -2,13 +2,13 @@
 
 Pi Local is a Windows desktop harness for local model inference, tool use, and resumable jobs. Pi starts its own model service. The default release uses authenticated loopback, local workspace tools, and a checkout-specific state directory. It needs no API account or API key from the user.
 
-[Research paper, v0.1.1](research/pi-local-v0.1.1.pdf) · [Reproduction guide](docs/reproducibility.md) · [Evaluation ledger](research/evidence/2026-11-20.md) · [Releases](https://github.com/KyrellosAyman/pi-local/releases)
+[Research paper, v0.1.2](research/pi-local-v0.1.2.pdf) · [Reproduction guide](docs/reproducibility.md) · [Evaluation ledger](research/evidence/2026-11-21.md) · [Releases](https://github.com/KyrellosAyman/pi-local/releases)
 
 ## Install on Windows
 
 1. Download and extract the [latest release](https://github.com/KyrellosAyman/pi-local/releases/latest) into a writable folder.
 2. Install [Node.js 24.22.3 x64](https://nodejs.org/dist/v24.22.3/) and use Python 3.12.16 x64 or newer in the 3.12 series, with Tk. If you need Python, download the [verified portable build](docs/reproducibility.md#python-for-windows). Open a new PowerShell window in the extracted repository.
-3. Run the two commands below. Setup verifies the exact model, projector, engine, and CUDA files against the [asset manifest](native-qwen/windows-assets.json).
+3. Run the two commands below. Setup verifies the model, projector, engine, CUDA libraries, and offline search tools against the [asset manifest](native-qwen/windows-assets.json).
 
 ```powershell
 & '.\Setup Pi.ps1' -Download

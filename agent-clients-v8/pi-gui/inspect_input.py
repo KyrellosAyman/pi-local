@@ -28,7 +28,6 @@ IMAGE_EXT = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tif', '.tiff', 
 AV_EXT = {'.mov', '.mp4', '.mkv', '.webm', '.avi', '.m4v', '.mpg', '.mpeg', '.ts', '.wmv',
           '.flv', '.3gp', '.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.wma', '.aif', '.aiff'}
 YAMNET = SPEECH / 'yamnet'
-YAMNET_SHA = 'd3835ffbbd4a1bb3e777f0ca217b5007907f5171dd5d17c4236b95b2af8f908e'
 
 
 def digest(path):
@@ -155,15 +154,17 @@ def sound_events(samples):
     import onnxruntime as ort
 
     model = YAMNET / 'yamnet.onnx'
-    if digest(model) != YAMNET_SHA:
-        raise RuntimeError('The pinned sound event model does not match its checksum.')
+    labels_file = YAMNET / 'yamnet_class_map.csv'
+    pins = json.loads((MEDIA / 'runtime-pins.json').read_text(encoding='utf-8'))['yamnet']
+    if any(digest(path) != pins[path.name] for path in (model, labels_file)):
+        raise RuntimeError('The pinned sound event model or label map does not match its checksum.')
     options = ort.SessionOptions()
     options.intra_op_num_threads = options.inter_op_num_threads = 1
     engine = ort.InferenceSession(str(model), options, providers=['CPUExecutionProvider'])
     scores = engine.run(['output_0'], {'waveform': samples})[0]
     if scores.ndim != 2 or scores.shape[1] != 521 or not np.isfinite(scores).all():
         raise RuntimeError('The sound event model returned an unexpected score tensor.')
-    with (YAMNET / 'yamnet_class_map.csv').open(encoding='utf-8', newline='') as labels:
+    with labels_file.open(encoding='utf-8', newline='') as labels:
         names = {int(row['index']): row['display_name'] for row in csv.DictReader(labels)}
     maxima = scores.max(axis=0)
     return [{'label': names[int(index)], 'score': round(float(maxima[index]), 4)}
@@ -183,31 +184,47 @@ def audio_excerpt(path, start=0, duration=30, transcribe=True, channel=None):
     audio = next((stream for stream in meta.get('streams', []) if stream.get('codec_type') == 'audio'), None)
     if audio is None:
         raise ValueError('No audio stream was found.')
+    raw_duration = meta.get('format', {}).get('duration')
+    media_seconds = float(raw_duration) if raw_duration and raw_duration != 'N/A' else None
+    if media_seconds is not None and media_seconds > 0 and start >= media_seconds:
+        raise ValueError(f'Start {start:g} s is at or after the recording end ({media_seconds:g} s). '
+                         'Start is an offset from the beginning. Use start=0 or omit it for the first window.')
     channel_count = audio['channels']
     if channel is not None and (type(channel) is not int or not 1 <= channel <= channel_count):
         raise ValueError(f'Choose an integer channel from 1 to {channel_count}, or omit it for the mono mix.')
-    channel_rate = min(48000, int(audio['sample_rate']))
+    source_rate = int(audio['sample_rate'])
+    channel_rate = min(48000, source_rate)
     channel_limit = max(1, round(duration * channel_rate))
+    # Trim the original samples before the resampler can blend in audio beyond the window.
+    source_trim = f'atrim=end_sample={max(1, round(duration * source_rate))}'
     with TemporaryDirectory(prefix='pi-audio-') as folder:
         excerpt = Path(folder) / 'speech.wav'
         limit = round(duration * 16000)
-        analysis_filter = f'aresample=16000,atrim=end_sample={limit}'
+        analysis_filter = f'{source_trim},aresample=16000,atrim=end_sample={limit}'
         if channel is not None:
             analysis_filter = f'pan=mono|c0=c{channel - 1},{analysis_filter}'
         channel_pcm = ff('ffmpeg', [
             '-v', 'error', '-nostdin', '-ss', f'{start:.4f}', *input_flags(path), '-i', path,
             '-map', '0:a:0', '-vn', '-af', analysis_filter,
             '-ac', '1', '-c:a', 'pcm_s16le', excerpt,
-            '-map', '0:a:0', '-vn', '-af', f'aresample={channel_rate},atrim=end_sample={channel_limit}',
+            '-map', '0:a:0', '-vn', '-af', f'{source_trim},aresample={channel_rate},atrim=end_sample={channel_limit}',
             '-c:a', 'pcm_f32le', '-f', 'f32le', 'pipe:1'])
-        if not 0 < len(channel_pcm) <= channel_limit * channel_count * 4 or len(channel_pcm) % (channel_count * 4):
+        if not channel_pcm:
+            raise ValueError(f'No audio was decoded at start {start:g} s. Try an earlier offset or omit start.')
+        if len(channel_pcm) > channel_limit * channel_count * 4 or len(channel_pcm) % (channel_count * 4):
             raise ValueError('Unexpected decoded channel sample count.')
-        channel_levels = np.abs(np.frombuffer(channel_pcm, dtype='<f4').reshape(-1, channel_count))
+        decoded = np.frombuffer(channel_pcm, dtype='<f4').reshape(-1, channel_count)
+        channel_levels = np.abs(decoded)
         if not np.isfinite(channel_levels).all():
             raise ValueError('The decoded audio includes non-finite channel levels.')
         channel_peaks = channel_levels.max(axis=0)
+        nonzero = channel_levels != 0
+        first_nonzero = nonzero.argmax(axis=0)
+        nonzero_end = len(decoded) - nonzero[::-1].argmax(axis=0)
         channel_dbfs = [dbfs(level) for level in channel_peaks]
         channel_rms = np.sqrt(np.mean(channel_levels ** 2, axis=0))
+        loudest_peak = float(channel_peaks.max())
+        loudest_rms = float(channel_rms.max())
         full_scale = np.count_nonzero(channel_levels >= 32767/32768, axis=0)
         with wave.open(str(excerpt), 'rb') as wav:
             if wav.getnframes() <= 0 or wav.getnframes() > limit:
@@ -217,16 +234,33 @@ def audio_excerpt(path, start=0, duration=30, transcribe=True, channel=None):
         end = start + len(samples) / 16000
         result = {'start_seconds': start, 'end_seconds': end, 'samples': len(samples), 'sample_rate': 16000,
                   'rms_dbfs': dbfs(np.sqrt(np.mean(samples ** 2))), 'peak_dbfs': dbfs(peak),
+                  'recording_setup_status': 'unknown_from_audio_analysis',
+                  'recording_setup_scope': ('The measurements describe the decoded file. '
+                                            'Channel levels at capture and any later processing remain unknown.'),
+                  'peak_reference_channels': [int(i) + 1 for i in np.flatnonzero(channel_peaks == loudest_peak)]
+                  if loudest_peak else [],
+                  'rms_reference_channels': [int(i) + 1 for i in np.flatnonzero(channel_rms == loudest_rms)]
+                  if loudest_rms else [],
                   'digital_silence': not bool(channel_peaks.any()),
                   'channel_sample_rate': channel_rate, 'samples_per_channel': len(channel_levels),
+                  'decoded_nonzero_spans_seconds_from_excerpt_start': [
+                      [round(int(first_nonzero[i]) / channel_rate, 6), round(int(nonzero_end[i]) / channel_rate, 6)]
+                      if channel_peaks[i] else None for i in range(channel_count)],
                   'channels': [{'channel': i+1, 'peak_dbfs': channel_dbfs[i], 'rms_dbfs': dbfs(channel_rms[i]),
+                                'peak_relative_to_loudest_channel_db': dbfs(channel_peaks[i] / loudest_peak) if loudest_peak else None,
+                                'rms_relative_to_loudest_channel_db': dbfs(channel_rms[i] / loudest_rms) if loudest_rms else None,
                                 'digital_silence': channel_dbfs[i] is None,
                                 'gain_headroom_db': max(0.0, -channel_dbfs[i]) if channel_dbfs[i] is not None else None,
                                 'samples_at_full_scale': int(full_scale[i])} for i in range(channel_count)],
                   'sound_event_hints': sound_events(samples) if peak else []}
+        if channel_count == 2:
+            difference = np.abs(decoded[:, 0] - decoded[:, 1])
+            difference_peak = float(difference.max())
+            result['decoded_stereo_channels_identical'] = difference_peak == 0
+            result['decoded_stereo_difference_peak_dbfs'] = dbfs(difference_peak)
+            result['stereo_difference_peak_relative_to_loudest_channel_db'] = dbfs(difference_peak / loudest_peak) if loudest_peak else None
         if channel is None:
-            original_peak = float(channel_peaks.max())
-            result['mono_peak_change_from_loudest_channel_db'] = dbfs(peak / original_peak) if peak and original_peak else None
+            result['mono_peak_change_from_loudest_channel_db'] = dbfs(peak / loudest_peak) if peak and loudest_peak else None
             result['mono_analysis_silence'] = peak == 0
             analysis_scope = ('Speech and event hints use the mono mix. A negative mono peak change is measured '
                               'attenuation versus the loudest original channel, including when caused by averaging. '
@@ -245,13 +279,24 @@ def audio_excerpt(path, start=0, duration=30, transcribe=True, channel=None):
             raw = json.loads(Path(receipt['transcript_path']).read_text(encoding='utf-8'))
             if isinstance(raw.get('words'), list):
                 result['words_relative_to_excerpt'] = raw['words']
-        raw_duration = meta.get('format', {}).get('duration')
-        if raw_duration and raw_duration != 'N/A':
-            result['next_start_seconds'] = end if end < float(raw_duration) - .002 else None
+        if media_seconds is not None:
+            result['next_start_seconds'] = end if end < media_seconds - .002 else None
         result['scope'] = (analysis_scope +
                            'A channel marked digitally silent has decoded zero samples throughout the window. '
+                           'Each nonzero span is a decoded channel envelope relative to the excerpt start. '
+                           'Its exclusive end is one sample after the last nonzero sample. Add start_seconds '
+                           'for recording time. A span can contain silent intervals and does not measure speech. '
+                           'Transcript word times estimate speech timing and can extend beyond measured signal. '
+                           'Peak, RMS and stereo-difference values in dBFS are relative to digital full scale. '
+                           'Use the relative-to-loudest-channel dB fields when comparing peaks or RMS. '
+                           'Peak and RMS have separate references. Null means there is no finite level or reference. '
+                           'Similar channel peaks or RMS do not establish identical waveforms. For overlapping voices '
+                           'in stereo, select each channel separately before interpreting timing or transcription. '
                            'Describe sound labels as candidates. Classifier scores do not verify an event or identify '
-                           'its source. Gain headroom estimates how much uniform '
+                           'its source or establish that two events do not overlap. Channel measurements and '
+                           'classifier labels do not establish microphone placement, rooms or recording conditions. '
+                           'Report the recording setup as unknown when this is the only evidence. '
+                           'Gain headroom estimates how much uniform '
                            'gain a decoded channel can take before reaching full scale. It excludes intersample peaks. '
                            'Full-scale counts include either polarity at the magnitude threshold 32767/32768 and '
                            'indicate possible saturation. An empty transcript alone does not establish absence of '

@@ -1,12 +1,13 @@
 
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import _tkinter
 import json
 import os
 from pathlib import Path
 import sys, tempfile, threading, time, tkinter as tk
 from PIL import Image
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from types import SimpleNamespace
 from unittest.mock import patch
 path=Path(__file__).resolve().parent
@@ -163,10 +164,14 @@ def mock_profile(state,key,**options):
 backend.prepare=mock_profile
 root=tk.Tk()
 root.withdraw()
+def pump_events():
+ deadline=time.monotonic()+.025
+ while time.monotonic()<deadline and root.tk.dooneevent(_tkinter.ALL_EVENTS | _tkinter.DONT_WAIT):
+  pass
 def wait_for(condition, seconds=18):
  stop=time.monotonic()+seconds
  while time.monotonic()<stop:
-  root.update()
+  pump_events()
   if condition():return
   time.sleep(.025)
  raise RuntimeError(f'UI condition timed out with status {ui.status.get()!r}. {ui.chat.get("1.0","end")[:650]}')
@@ -178,7 +183,7 @@ def shown_while_waiting(text, ready=lambda:True):
   return False
 checks={}
 try:
- with tempfile.TemporaryDirectory(prefix='pi-gui-verify-') as directory:
+ with tempfile.TemporaryDirectory(prefix='pi-gui-verify-') as directory, ExitStack() as cleanup:
   tmp=Path(directory); project=tmp/'work'; project.mkdir()
   (project/script_name).write_text('console.log(JSON.stringify(process.argv.slice(2)));\n', encoding='utf-8')
   downloads=tmp/'downloads'; downloads.mkdir()
@@ -188,6 +193,14 @@ try:
   folder=project/'nested'; folder.mkdir(); (folder/'note.txt').write_text('workspace fixture')
   trace=tmp/'latency.jsonl'
   ui=app.App(root,Synthetic(),project,tmp/'state',browser_only=browser_only,latency_trace=trace)
+  def settle_rpc():
+   for flag in (release, release_reasoning, release_formatted, release_tool_arguments,
+                release_after_read, release_native_start):
+    flag.set()
+   if ui.rpc and ui.rpc.process.poll() is None:
+    ui.rpc.close()
+    ui.rpc.process.wait(timeout=12)
+  cleanup.callback(settle_rpc)
   ui.show_files()
   row=next(row for row,(item,_) in ui.file_rows.items() if item==folder)
   ui.file_tree.focus(row)
@@ -213,10 +226,10 @@ try:
   checks['burst_tool_updates_show_latest_snapshot']='superseded partial' not in ui.chat.get('1.0','end')
   ui._tool({**sample,'type':'tool_execution_end','result':{'content':[{'type':'text','text':'first\nsecond'}]}})
   checks['finished_tool_collapses_in_place']='\nfirst\n' not in visible() and visible().count('   ·   Done')==1
-  ui._event({'type':'compaction_start'})
+  ui._event({'type':'compaction_start','_received_ns':time.perf_counter_ns()})
   checks['compaction_start_status']=ui.status.get()=='Compacting context'
   failure='Auto-compaction failed: Summarization failed: generation hit the token cap and the summary is incomplete'
-  ui._event({'type':'compaction_end','aborted':False,'errorMessage':failure})
+  ui._event({'type':'compaction_end','aborted':False,'errorMessage':failure,'_received_ns':time.perf_counter_ns()})
   checks['compaction_failure_visible_and_uncounted']=failure in visible() and ui.compactions==0
   ui._event({'type':'compaction_end','aborted':True})
   checks['compaction_cancelled_visible_and_uncounted']='Context compaction cancelled.' in visible() and ui.compactions==0
@@ -236,7 +249,7 @@ try:
   if not browser_only:
    ui.attachments=[photo]
   root.deiconify()
-  root.update()
+  wait_for(lambda: root.winfo_viewable() and ui.chat.winfo_height()>1)
   idle_height=ui.chat.winfo_height()
   if browser_only:
    ui.send_button.invoke()
@@ -373,7 +386,7 @@ try:
   checks['inline_tool_folds_again']=ui.chat.tk.call(str(ui.chat), 'get', '-displaychars', '1.0', 'end')==compact
   ui._show_latest()
   checks['latest_reenables_follow']=ui.chat_following
-  ui.activity.selection_set(ids[7]);root.update()
+  ui.activity.selection_set(ids[7]);pump_events()
   checks['work_blocked_until_prompt_and_skill']=(
       'prepare_prompt' in ui.tasks[ids[0]][2] and 'load a relevant skill' in ui.tasks[ids[4]][2])
   checks['work_blocked_until_plan']=ui.activity.item(ids[2])['values'][1]=='Error' and 'update_plan' in ui.tasks[ids[2]][2]
@@ -532,6 +545,11 @@ try:
    for row in post_tool)
   tool_intervals=[row for row in timeline if row['type']=='tool_interval']
   model_intervals=[row for row in timeline if row['type']=='model_interval']
+  compaction_intervals=[row for row in timeline if row['type']=='compaction_interval']
+  checks['trace_times_failed_compaction_without_content']=(len(compaction_intervals)==1 and
+   compaction_intervals[0]['outcome']=='failed' and
+   compaction_intervals[0]['start_ns']<=compaction_intervals[0]['end_ns'] and
+   failure not in trace.read_text(encoding='utf-8'))
   checks['trace_attributes_completed_tool_and_model_intervals']=(
    bool(tool_intervals and model_intervals) and
    len({row['call'] for row in tool_intervals})==len(tool_intervals) and

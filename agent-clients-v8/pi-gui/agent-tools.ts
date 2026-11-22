@@ -5,14 +5,16 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
 import { Type } from "typebox";
 import { registerSkillWorkflow } from "./skill-workflow.ts";
-import { registerStallRecovery } from "./stall-recovery.ts";
-import { registerJobRecovery } from "./job-recovery.ts";
+import { POWERSHELL_TIMEOUT_SECONDS, registerStallRecovery } from "./stall-recovery.ts";
+import { registerJobRecovery, verifyStageCheckpoint } from "./job-recovery.ts";
 
+const maxPlanSteps = 12;
 const step = Type.Object({
 	id: Type.String({ minLength: 1, maxLength: 32 }),
 	title: Type.String({ minLength: 1, maxLength: 180 }),
 	skillQuery: Type.String({ minLength: 1, maxLength: 180, pattern: "\\S" }),
 	status: Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("completed")]),
+	checkpoint: Type.Optional(Type.String({ minLength: 1, description: "Workspace JSON path for a checkpoint the user requires at this stage. Before closing, write finished_files entries with path and sha256." })),
 });
 
 async function detachedPilotReceipt(script, args, workspace, call, deadline, signal) {
@@ -75,6 +77,8 @@ export default function agentTools(pi) {
 			systemPrompt: event.systemPrompt + "\n\nFor new tool work, call update_plan by itself after prepare_prompt. " +
 				"Give each step a concrete title and a short skillQuery for its technique or explicitly requested standard. Mark the current step in progress. " +
 				"For a signed-in or interactive website in Chrome, start with get_chrome_state and use chrome_action on its verified controls. " +
+				"When the user names a registered tool, try it for the matching work before searching source files or switching to shell commands. " +
+				`PowerShell commands without a timeout stop after ${POWERSHELL_TIMEOUT_SECONDS} seconds. Use workspace jobs for long scripts. ` +
 				"If a check repeats without new evidence, change the method or use an independent reference. " +
 				"If new information changes the work, revise the plan and briefly explain why. Mark a step complete only after verifying it.",
 		};
@@ -84,37 +88,55 @@ export default function agentTools(pi) {
 		if (!planned && event.toolName !== "update_plan" && !workflow.allowed.has(event.toolName)) {
 			return { block: true, reason: "Call update_plan by itself before using work tools." };
 		}
+		if (event.toolName === "powershell" && event.input.timeout === undefined) {
+			event.input.timeout = POWERSHELL_TIMEOUT_SECONDS;
+		}
 	});
 	const pauseJob = registerJobRecovery(pi);
 
 	pi.registerTool({
 		name: "update_plan",
 		label: "Update plan",
-		description: "Record the complete current plan and explain changes briefly. Use new IDs for new work or mark a finished step in progress to reopen it.",
-		parameters: Type.Object({ steps: Type.Array(step, { minItems: 1, maxItems: 12 }), reason: Type.Optional(Type.String({ maxLength: 300 })) }),
-		async execute(_id, { steps, reason }) {
-			if (new Set(steps.map((item) => item.id)).size !== steps.length ||
+		description: "Record the current plan and explain changes briefly. Previously completed steps carry forward. Use new IDs for new work or mark a finished step in progress to reopen it. Declare a stage's checkpoint path when the user requires one.",
+		parameters: Type.Object({ steps: Type.Array(step, { minItems: 1, maxItems: maxPlanSteps }), reason: Type.Optional(Type.String({ maxLength: 300 })) }),
+		async execute(_id, { steps, reason }, _signal, _onUpdate, ctx) {
+			const proposedIds = new Set(steps.map((item) => item.id));
+			if (proposedIds.size !== steps.length ||
 				steps.filter((item) => item.status === "in_progress").length > 1) {
 				throw new Error("Use unique step IDs and at most one in-progress step.");
 			}
-			const omitted = previousSteps.filter((item) => item.status === "completed" && !steps.some((next) => next.id === item.id));
-			if (omitted.length) {
-				throw new Error("Keep completed steps in the revised plan. Restore these saved steps: " + JSON.stringify(omitted));
+			const updatedSteps = [...steps];
+			for (const [index, item] of previousSteps.entries()) {
+				if (item.status === "completed" && !proposedIds.has(item.id)) updatedSteps.splice(index, 0, item);
 			}
-			const plan = workflow.setPlan(steps.map((item) => item.status === "completed"
-				? previousSteps.find((previous) => previous.id === item.id && previous.status === "completed") ?? item
-				: item));
+			if (updatedSteps.length > maxPlanSteps) {
+				throw new Error(`Use at most ${maxPlanSteps} steps including saved completed steps.`);
+			}
+			const verified = new Map();
+			const plan = workflow.setPlan(updatedSteps.map(({ id, title, skillQuery, status, checkpoint }) => {
+				const previous = previousSteps.find((item) => item.id === id);
+				if (checkpoint && previous?.checkpoint && checkpoint !== previous.checkpoint) {
+					throw new Error("Keep the declared checkpoint path for stage " + id + ": " + previous.checkpoint);
+				}
+				if (status === "completed" && previous?.status === "completed") return previous;
+				const path = previous?.checkpoint ?? checkpoint;
+				if (status === "completed" && path) verified.set(id, verifyStageCheckpoint(ctx.cwd, path));
+				return { id, title, skillQuery, status, ...(path ? { checkpoint: path } : {}) };
+			}));
 			const note = plan.reopened ? "Pi kept " + plan.reopened + " in progress because it still needed a skill route." : "";
 			if (reason && !note) {
 				planReason = reason;
 				recordReview(reason);
 			}
-			previousSteps = plan.steps;
+			previousSteps = plan.steps.map((item) => item.status === "completed" && verified.has(item.id)
+				? { ...item, checkpointProof: verified.get(item.id) } : item);
 			planned = true;
-			const details = { steps: plan.steps, reason: note || planReason, awaitingSkill: plan.routing, reopenedStep: plan.reopened,
+			const details = { steps: previousSteps, reason: note || planReason, awaitingSkill: plan.routing, reopenedStep: plan.reopened,
 				updatedAt: new Date().toISOString() };
 			pi.appendEntry("gui-plan", details);
-			return reply(["Plan recorded.", note, plan.routing ? "Call find_skills for the current stage: " + plan.routing : ""]
+			const receipts = previousSteps.filter((item) => item.status === "completed" && verified.has(item.id))
+				.map((item) => "Verified " + item.checkpoint + " at " + item.checkpointProof.verifiedAt + ".");
+			return reply(["Plan recorded.", note, plan.nextSkillAction, ...receipts]
 				.filter(Boolean).join(" "), details);
 		},
 	});
@@ -136,8 +158,9 @@ export default function agentTools(pi) {
 			const env = { ...process.env, PYTHONIOENCODING: "utf-8" };
 			delete env.PI_T03_API_KEY;
 			const deadline = Date.now() + timeout * 1000;
+			const argv = type === ".py" ? ["-B", script, ...args] : [script, ...args];
 			return new Promise((done, fail) => {
-				execFile(executable, [script, ...args], { cwd: ctx.cwd, signal, env, windowsHide: true,
+				execFile(executable, argv, { cwd: ctx.cwd, signal, env, windowsHide: true,
 					timeout: timeout * 1000, maxBuffer: 64 * 1024 }, async (error, stdout, stderr) => {
 					const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n");
 					if (error) {
