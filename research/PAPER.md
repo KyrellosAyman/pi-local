@@ -3,7 +3,7 @@
 
 **KyrellosAyman**
 
-Technical report • Version 0.1.6 • 22 November 2026
+Technical report • Version 0.1.7 • 22 November 2026
 
 ### Abstract
 
@@ -163,6 +163,10 @@ In the full blind chat, 21 analyzer calls recovered distinct voices, relative ch
 
 The same prompt, recordings and model profile ran with the revised skill and media runtime in 1,089.40 seconds. All 25 analyzer calls succeeded. Pi identified unequal stereo samples and separated measured silence from the classification. It omitted recoverable opening words and relative levels, overestimated the overlap interval and missed the shift from ocean-like to rain-like candidates. Strict listening remains open. Median decode was 20.52 tokens/s and seven of 20 requests fell below 20. Concurrent setup and transfers limit elapsed-time comparisons.
 
+The subsequent listening workflow grounds the final chat report in the current turn’s local measurement records. It renders PCM levels, decoded activity, separate stereo speech estimates and tentative sound candidates scoped to their observed windows. When a full-window recognition has invalid word times, a valid activity-window pass can replace it if the normalized words closely agree. Pi keeps the replacement words and their own times together and discloses any lexical disagreement.
+
+Two controlled case sets passed in the visible local Pi chat after exact-input replays. The second set passed 13 content checks and the timing checks, with 99 of 99 reference words recovered. The third set originally passed 12 of 15 checks. An independent audit found that one word score included an explanatory note and that the missing left speech time remained a real failure. The unchanged third replay passed all 15 checks. Four speech estimates were within their frozen error limits. The left and right estimates of 0.59–10.11 and 11.19475–19.51475 seconds were both inside their independently decoded activity, and the report left audible overlap unresolved. The run took 966.031 seconds over 17 requests, with a 132.418-second longest mapped post-tool wait. These controlled replays establish the targeted repairs on the exercised inputs. Unaltered multi-speaker recordings and real-world listening accuracy have yet to pass a comparable test. [10]
+
 The private Moonlit Map assembly decoded at 1× for 30 seconds. The frame and audio packet checks could locate specific beak, mouth-cue and sync defects. The initial independent AV model contradicted some known dialogue. Shot B's exact local repair, C's normal-speed sync, D and E perceptual review, and the 30-minute production trial require separate acceptance.
 
 The initial Wan2.2 5B shot moved about 209 pixels left and clipped the right edge. A second control used a single upright start image. The car stayed in view and advanced 10.56 pixels right, with a late reversal and shape distortion. Each clip had 121 frames at 640 × 384 and 24 fps. The 5B validator rejected 25-frame source overlap, which preflight now catches before the GPU handoff. The workstation trials used quantized weights and an exclusive handoff. [5]
@@ -208,3 +212,5 @@ Pi has demonstrated a standalone local model lifecycle, exact elapsed archive re
 [8] KyrellosAyman. 2026. [v0.1.5 desktop and long-context results](https://github.com/KyrellosAyman/pi-local/blob/v0.1.5/research/evidence/2026-11-22-desktop-performance.md).
 
 [9] KyrellosAyman. 2026. [v0.1.6 MCP OAuth scope results](https://github.com/KyrellosAyman/pi-local/blob/v0.1.6/research/evidence/2026-11-22-mcp-oauth.md).
+
+[10] KyrellosAyman. 2026. [v0.1.7 local listening and timing results](https://github.com/KyrellosAyman/pi-local/blob/v0.1.7/research/evidence/2026-11-22-listening.md).

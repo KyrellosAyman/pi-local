@@ -26,7 +26,7 @@ DESKTOP_TOOLS = ('list_windows', 'get_window_state', 'click', 'set_value',
                  'type_text', 'press_key', 'hotkey', 'scroll')
 BROWSER_TOOLS = ('get_chrome_state', 'chrome_action')
 ANALYSIS_TOOLS = ('inspect_input', 'view_image_file', 'sample_video', 'analyze_audio',
-                  'read_document', 'read_website')
+                  'reply_with_audio_findings', 'read_document', 'read_website')
 SKILL_TOOLS = ('prepare_prompt', 'find_skills', 'use_skill', 'read_skill_reference',
                'research_skill', 'save_skill', 'publish_skill')
 WORKSPACE_TOOLS = ('read', 'powershell', 'run_script', 'edit', 'write', 'grep', 'find', 'ls')

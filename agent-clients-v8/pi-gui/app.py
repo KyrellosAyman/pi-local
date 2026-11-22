@@ -86,12 +86,23 @@ def format_audio_evidence(filename, result):
     def time_label(value):
         return f'{value:.6f}'.rstrip('0').rstrip('.')
 
+    def transcript(estimate):
+        text = (estimate.get('speech_text') or '').strip()
+        if text:
+            return text
+        return {'analysis_signal_digital_silence': 'No words returned. The selected signal is digitally silent.',
+                'not_requested': 'Transcription was not requested.'}.get(
+                    estimate.get('transcription_status'), 'No words returned. Speech and overlap remain unverified.')
+
     start = result['start_seconds']
     source = f"channel {result['analysis_channel']}" if 'analysis_channel' in result else 'the mono mix'
-    lines = [filename, f"{time_label(start)}–{time_label(result['end_seconds'])} s  ·  Estimates use {source}.",
-             '', 'Decoded channel measurements',
-             f"Peak reference: {reference(result['peak_reference_channels'])}",
-             f"RMS reference: {reference(result['rms_reference_channels'])}"]
+    lines = [filename, f"{time_label(start)}–{time_label(result['end_seconds'])} s  ·  Sound candidates use {source}."]
+    source_rate = result.get('source_sample_rate_hz')
+    analysis_rate = result.get('analysis_sample_rate_hz')
+    if source_rate and analysis_rate:
+        lines.append(f'Source sample rate {source_rate:,} Hz  ·  Model input {analysis_rate:,} Hz')
+    lines.extend(('', 'Decoded channel measurements', f"Peak reference: {reference(result['peak_reference_channels'])}",
+                  f"RMS reference: {reference(result['rms_reference_channels'])}"))
     for channel, span in zip(result['channels'], result['decoded_nonzero_spans_seconds_from_excerpt_start'], strict=True):
         peak, rms = (level(channel[f'{kind}_dbfs']) for kind in ('peak', 'rms'))
         peak_delta, rms_delta = (level(channel[f'{kind}_relative_to_loudest_channel_db'], relative=True)
@@ -105,10 +116,33 @@ def format_audio_evidence(filename, result):
         lines.append(f'Decoded stereo waveforms are {difference} in this window.')
     lines.extend(('', 'Recording setup: unknown from the audio.', '',
                   'Sound candidates (peak classifier scores)'))
-    lines.extend(f"{hint['label']}  {hint['score']:.4f}" for hint in result['sound_event_hints'])
-    if not result['sound_event_hints']:
-        lines.append('No candidates returned.')
-    lines.extend(('', 'Estimated transcript', (result.get('speech_text') or '').strip() or 'No words returned.'))
+    for signal in (result, *result.get('channel_sound_events', ())):
+        if signal is not result:
+            lines.extend(('', f"Sound candidates for channel {signal['channel']}"))
+        lines.extend(f"{hint['label']}  {hint['score']:.4f}" for hint in signal['sound_event_hints'])
+        if not signal['sound_event_hints']:
+            lines.append('No candidates returned.')
+        for window in signal.get('sound_event_time_windows', ()):
+            first, end = map(time_label, window['window_seconds'])
+            hints = ', '.join(f"{hint['label']} {hint['score']:.4f}" for hint in window['hints'])
+            lines.append(f'{first}–{end} s  ·  {hints or "No candidates returned."}')
+    def add_transcript(heading, estimate):
+        lines.extend(('', heading, transcript(estimate)))
+        span = estimate.get('estimated_word_span_seconds_from_excerpt_start')
+        if span:
+            first, end = (time_label(start + offset) for offset in span)
+            lines.append(f'    Estimated first-to-last word range {first}–{end} s. Gaps may occur within it.')
+        status = estimate.get('word_timing_status')
+        if status == 'reestimated_on_decoded_activity':
+            lines.append('    Timing re-estimated within the decoded activity window.')
+        elif status == 'inconsistent_with_decoded_activity':
+            lines.append('    Word timing remains unresolved after comparison with decoded activity.')
+        if estimate.get('word_recognition_disagreement'):
+            lines.append('    The full and activity-window passes disagree on some words.')
+
+    for estimate in result.get('channel_transcripts', ()):
+        add_transcript(f"Estimated transcript for channel {estimate['channel']}", estimate)
+    add_transcript(f'Estimated transcript using {source}', result)
     return '\n'.join(lines)
 
 

@@ -10,7 +10,7 @@ const customType = "local-pi-job-recovery";
 const jobId = /^[a-f0-9]{32}$/;
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const readOnly = new Set(["read", "grep", "find", "ls", "inspect_input", "view_image_file", "sample_video",
-	"analyze_audio", "read_document", "read_website", "list_recent_pngs", "prepare_prompt", "update_plan", "review_initial_plan",
+	"analyze_audio", "reply_with_audio_findings", "read_document", "read_website", "list_recent_pngs", "prepare_prompt", "update_plan", "review_initial_plan",
 	"find_skills", "use_skill", "read_skill_reference", "research_skill", "save_skill", "get_chrome_state",
 	"list_windows", "get_window_state", "mcp__windows__get_chrome_state", "mcp__chrome__get_chrome_state",
 	"mcp__windows__list_windows", "mcp__windows__get_window_state"]);

@@ -5,6 +5,7 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
 import { Type } from "typebox";
 import { registerSkillWorkflow } from "./skill-workflow.ts";
+import { explicitAudioReplyRequested, retainedAudioForStep } from "./audio-findings.ts";
 import { POWERSHELL_TIMEOUT_SECONDS, registerStallRecovery } from "./stall-recovery.ts";
 import { registerJobRecovery, verifyStageCheckpoint } from "./job-recovery.ts";
 import { registerInitialPlanReview } from "./initial-plan-review.ts";
@@ -112,6 +113,15 @@ export default function agentTools(pi) {
 			throw new Error(`Use at most ${maxPlanSteps} steps including saved completed steps.`);
 		}
 		const verified = new Map();
+		const scopedAudio = explicitAudioReplyRequested(ctx);
+		const measured = ctx && ((step) => {
+			const prior = previousSteps.find((item) => item.id === step.id && item.status === "pending");
+			if (!prior) return false;
+			const isAnalysis = (title) => /^analy[sz]e\b/i.test(title.trim());
+			if (scopedAudio ? !isAnalysis(prior.title) || !isAnalysis(step.title) :
+				prior.title !== step.title || prior.skillQuery !== step.skillQuery) return false;
+			return retainedAudioForStep(ctx, step.title, prior.title);
+		});
 		const plan = workflow.setPlan(updatedSteps.map(({ id, title, skillQuery, status, checkpoint }) => {
 			const previous = previousSteps.find((item) => item.id === id);
 			if (checkpoint && previous?.checkpoint && checkpoint !== previous.checkpoint) {
@@ -121,8 +131,9 @@ export default function agentTools(pi) {
 			const path = previous?.checkpoint ?? checkpoint;
 			if (status === "completed" && path) verified.set(id, verifyStageCheckpoint(ctx.cwd, path));
 			return { id, title, skillQuery, status, ...(path ? { checkpoint: path } : {}) };
-		}));
-		const note = plan.reopened ? "Pi kept " + plan.reopened + " in progress because it still needed a skill route." : "";
+		}), measured, scopedAudio);
+		const note = plan.reopened ? "Pi kept " + plan.reopened + " in progress" +
+			(plan.routing ? " because it still needed a skill route." : " for final verification.") : "";
 		if (reason && !note) {
 			planReason = reason;
 			recordReview(reason);

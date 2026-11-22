@@ -22,6 +22,12 @@ def verify(root, *, close_at_threshold=False):
     (workspace / 'record.txt').write_bytes(whole.encode())
     (workspace / 'short.txt').write_text('Short source footer: 8745', encoding='utf-8')
     fixture.requests.clear()
+    # This RPC test has no admitted GUI job or first-plan review.
+    fixture.bootstrap = [
+        ('prepare_prompt', {'brief': fixture.OBJECTIVE, 'checks': ['Verify the original read.']}),
+        ('update_plan', {'steps': [{**fixture.step, 'status': 'in_progress'}]}),
+        *fixture.skill_route,
+    ]
     reads = [('read', {'path': 'record.txt'})]
     if not close_at_threshold:
         reads.append(('read', {'path': 'short.txt'}))
