@@ -472,10 +472,15 @@ try:
        for m in records[17]['messages'])
    checks['inline_tool_command_and_recovery_visible']=all(word in ui.chat.get('1.0','end') for word in
        ('Write-Output PI_GUI_STALL','Repeated check refused',script_name))
+   deferred_media={'reply_with_audio_findings'}
+   if not web_enabled:
+    deferred_media.add('read_website')
    checks['media_tools_and_repo_navigation_on_wire']=all(
-       (set(backend.ANALYSIS_TOOLS) - (set() if web_enabled else {'read_website'}))
+       (set(backend.ANALYSIS_TOOLS) - deferred_media)
        | {'grep','find','ls'} <= set(record['tools'])
        for record in work_requests)
+   checks['audio_report_stays_hidden_without_audio_evidence']=all(
+       'reply_with_audio_findings' not in record['tools'] for record in work_requests)
    checks['image_attachment_on_wire']=records[0]['image_parts']==1
    checks['tool_image_reaches_the_next_request']=ui.activity.item(ids[8])['values'][1]=='Done' and (
        records[9]['image_parts']>records[8]['image_parts'])

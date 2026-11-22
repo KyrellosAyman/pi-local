@@ -1,6 +1,7 @@
 """Prepare local document pages, vision frames and audio evidence for Pi."""
 import base64
 import csv
+from difflib import SequenceMatcher
 from hashlib import file_digest
 from io import BytesIO
 from itertools import islice
@@ -9,6 +10,7 @@ import math
 import os
 import ipaddress
 from pathlib import Path
+import re
 import socket
 import subprocess
 import sys
@@ -149,7 +151,7 @@ def numbered_video_frames(path, meta, stream, frames, region):
             'scope': 'Frame numbers are zero-based in presentation order. Images follow the same order.'}
 
 
-def sound_events(samples):
+def sound_events(samples, start, sample_rate, channels=None):
     import numpy as np
     import onnxruntime as ort
 
@@ -161,18 +163,154 @@ def sound_events(samples):
     options = ort.SessionOptions()
     options.intra_op_num_threads = options.inter_op_num_threads = 1
     engine = ort.InferenceSession(str(model), options, providers=['CPUExecutionProvider'])
-    scores = engine.run(['output_0'], {'waveform': samples})[0]
-    if scores.ndim != 2 or scores.shape[1] != 521 or not np.isfinite(scores).all():
-        raise RuntimeError('The sound event model returned an unexpected score tensor.')
     with labels_file.open(encoding='utf-8', newline='') as labels:
         names = {int(row['index']): row['display_name'] for row in csv.DictReader(labels)}
-    maxima = scores.max(axis=0)
-    return [{'label': names[int(index)], 'score': round(float(maxima[index]), 4)}
-            for index in maxima.argsort()[-8:][::-1]]
+
+    def top(waveform):
+        if not np.any(waveform):
+            return []
+        scores = engine.run(['output_0'], {'waveform': waveform})[0]
+        if scores.ndim != 2 or scores.shape[1] != 521 or not np.isfinite(scores).all():
+            raise RuntimeError('The sound event model returned an unexpected score tensor.')
+        maxima = scores.max(axis=0)
+        return [{'label': names[int(index)], 'score': round(float(maxima[index]), 4)}
+                for index in maxima.argsort()[-8:][::-1]]
+
+    def describe(signal):
+        info = {'sound_event_hints': top(signal)}
+        if len(signal) >= sample_rate * 6:
+            middle = len(signal) // 2
+            halves = ((0, middle), (middle, len(signal)))
+            windows = [{'window_seconds': [start + left / sample_rate, start + right / sample_rate],
+                        'hints': top(signal[left:right])} for left, right in halves]
+            missing = {hint['label'] for hint in info['sound_event_hints']} - {
+                hint['label'] for window in windows for hint in window['hints']}
+            if missing and len(signal) >= sample_rate * 8:
+                for left, right in halves:
+                    midpoint = (left + right) // 2
+                    for first, end in ((left, midpoint), (midpoint, right)):
+                        hints = [hint for hint in top(signal[first:end]) if hint['label'] in missing]
+                        if hints:
+                            windows.append({'window_seconds': [start + first / sample_rate, start + end / sample_rate],
+                                            'hints': hints})
+            info['sound_event_time_windows'] = windows
+        return info
+
+    result = describe(samples)
+    if channels is not None:
+        result['channel_sound_events'] = [
+            {'channel': index, **describe(channel.astype(np.float32) / 32768)}
+            for index, channel in enumerate(channels.T, 1)]
+    return result
 
 
 def dbfs(level):
     return round(20 * math.log10(float(level)), 2) if level else None
+
+
+def recognize_speech(excerpt, output):
+    if str(MEDIA) not in sys.path:
+        sys.path.insert(0, str(MEDIA))
+    from transcribe_local import transcribe as pinned_transcribe
+
+    receipt = pinned_transcribe(excerpt, output)
+    text = receipt['text']
+    result = {'speech_text': text, 'transcription_status':
+              'estimated_words_returned' if text.strip() else 'no_words_returned'}
+    raw = json.loads(Path(receipt['transcript_path']).read_text(encoding='utf-8'))
+    if isinstance(raw.get('words'), list):
+        result['words_relative_to_excerpt'] = raw['words']
+    return result
+
+
+def word_span(words):
+    ranges = [(word.get('start'), word.get('end')) for word in words if isinstance(word, dict)]
+    ranges = [(start, end) for start, end in ranges
+              if all(isinstance(value, (int, float)) and math.isfinite(value) for value in (start, end))
+              and 0 <= start <= end]
+    return [min(start for start, _ in ranges), max(end for _, end in ranges)] if len(ranges) == len(words) and ranges else None
+
+
+def write_mono_pcm(path, samples, rate):
+    with wave.open(str(path), 'wb') as wav:
+        wav.setparams((1, 2, rate, 0, 'NONE', 'not compressed'))
+        wav.writeframes(samples.tobytes())
+
+
+def transcript_words(text):
+    return re.findall(r"\w+(?:'\w+)*", text.casefold().replace('’', "'"))
+
+
+def speech_estimate(excerpt, output, samples, rate):
+    result = recognize_speech(excerpt, output)
+    span_key = 'estimated_word_span_seconds_from_excerpt_start'
+    span = word_span(result.get('words_relative_to_excerpt', ()))
+    if result['transcription_status'] != 'estimated_words_returned' or not span:
+        return result
+    active = samples != 0
+    first, end = int(active.argmax()), len(samples) - int(active[::-1].argmax())
+    # Recognition edges are estimates. This tolerance flags substantial disagreement with digital silence.
+    tolerance = .25
+
+    def fits(estimate):
+        return first/rate - tolerance <= estimate[0] and estimate[1] <= end/rate + tolerance
+
+    if fits(span):
+        return {**result, span_key: span}
+    if end - first < len(samples):
+        recheck = output.with_name(output.name + '-activity.wav')
+        try:
+            write_mono_pcm(recheck, samples[first:end], rate)
+            alternate = recognize_speech(recheck, output.with_name(output.name + '-activity'))
+        except (OSError, ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired):
+            alternate = {}
+        words = alternate.get('words_relative_to_excerpt', ())
+        cropped_span = word_span(words)
+        baseline_words = transcript_words(result['speech_text'])
+        cropped_words = transcript_words(alternate.get('speech_text', ''))
+        # A crop uses the same PCM, but only retain its timing with its own closely agreeing transcript.
+        agreement = SequenceMatcher(None, baseline_words, cropped_words, autojunk=False).ratio()
+        if cropped_span and baseline_words and cropped_words and agreement >= .8:
+            offset = first/rate
+            adjusted = [round(value + offset, 6) for value in cropped_span]
+            if fits(adjusted):
+                result.update({span_key: adjusted, 'word_timing_status': 'reestimated_on_decoded_activity',
+                               'speech_text': alternate['speech_text'],
+                               'words_relative_to_excerpt': [{**word, 'start': round(word['start'] + offset, 6),
+                                                               'end': round(word['end'] + offset, 6)} for word in words]})
+                if baseline_words != cropped_words:
+                    result['word_recognition_disagreement'] = True
+                return result
+    result['word_timing_status'] = 'inconsistent_with_decoded_activity'
+    result['unverified_word_span_seconds_from_excerpt_start'] = span
+    result.pop('words_relative_to_excerpt', None)
+    return result
+
+
+def stereo_signal(stereo, rate, limit):
+    import numpy as np
+
+    with wave.open(str(stereo), 'rb') as wav:
+        count = wav.getnframes()
+        if (wav.getnchannels(), wav.getsampwidth(), wav.getframerate()) != (2, 2, rate) or not 0 < count <= limit:
+            raise ValueError('Unexpected sample clock in the separate stereo analysis.')
+        channels = np.frombuffer(wav.readframes(count), dtype='<i2').reshape(-1, 2)
+        if len(channels) != count:
+            raise ValueError('The separate stereo analysis was incomplete.')
+    return channels
+
+
+def stereo_speech_estimates(channels, directory, rate):
+    estimates = []
+    for index, samples in enumerate(channels.T, 1):
+        estimate = {'channel': index, 'transcription_status': 'analysis_signal_digital_silence'}
+        if samples.any():
+            mono = directory / f'channel-{index}.wav'
+            write_mono_pcm(mono, samples, rate)
+            estimate.update(speech_estimate(mono, directory / f'transcript-{index}', samples, rate))
+            estimate.pop('words_relative_to_excerpt', None)
+        estimates.append(estimate)
+    return estimates
 
 
 def audio_excerpt(path, start=0, duration=30, transcribe=True, channel=None):
@@ -193,22 +331,29 @@ def audio_excerpt(path, start=0, duration=30, transcribe=True, channel=None):
     if channel is not None and (type(channel) is not int or not 1 <= channel <= channel_count):
         raise ValueError(f'Choose an integer channel from 1 to {channel_count}, or omit it for the mono mix.')
     source_rate = int(audio['sample_rate'])
+    analysis_rate = 16000
     channel_rate = min(48000, source_rate)
     channel_limit = max(1, round(duration * channel_rate))
     # Trim the original samples before the resampler can blend in audio beyond the window.
     source_trim = f'atrim=end_sample={max(1, round(duration * source_rate))}'
     with TemporaryDirectory(prefix='pi-audio-') as folder:
-        excerpt = Path(folder) / 'speech.wav'
-        limit = round(duration * 16000)
-        analysis_filter = f'{source_trim},aresample=16000,atrim=end_sample={limit}'
+        folder = Path(folder)
+        excerpt = folder / 'speech.wav'
+        stereo = folder / 'stereo.wav'
+        include_stereo = channel is None and channel_count == 2
+        limit = round(duration * analysis_rate)
+        analysis_filter = f'{source_trim},aresample={analysis_rate},atrim=end_sample={limit}'
         if channel is not None:
             analysis_filter = f'pan=mono|c0=c{channel - 1},{analysis_filter}'
-        channel_pcm = ff('ffmpeg', [
+        decode = [
             '-v', 'error', '-nostdin', '-ss', f'{start:.4f}', *input_flags(path), '-i', path,
             '-map', '0:a:0', '-vn', '-af', analysis_filter,
             '-ac', '1', '-c:a', 'pcm_s16le', excerpt,
             '-map', '0:a:0', '-vn', '-af', f'{source_trim},aresample={channel_rate},atrim=end_sample={channel_limit}',
-            '-c:a', 'pcm_f32le', '-f', 'f32le', 'pipe:1'])
+            '-c:a', 'pcm_f32le', '-f', 'f32le', 'pipe:1']
+        if include_stereo:
+            decode.extend(['-map', '0:a:0', '-vn', '-af', analysis_filter, '-c:a', 'pcm_s16le', stereo])
+        channel_pcm = ff('ffmpeg', decode)
         if not channel_pcm:
             raise ValueError(f'No audio was decoded at start {start:g} s. Try an earlier offset or omit start.')
         if len(channel_pcm) > channel_limit * channel_count * 4 or len(channel_pcm) % (channel_count * 4):
@@ -229,10 +374,12 @@ def audio_excerpt(path, start=0, duration=30, transcribe=True, channel=None):
         with wave.open(str(excerpt), 'rb') as wav:
             if wav.getnframes() <= 0 or wav.getnframes() > limit:
                 raise ValueError('There are no decoded audio samples in the requested interval.')
-            samples = np.frombuffer(wav.readframes(wav.getnframes()), dtype='<i2').astype(np.float32) / 32768
+            mono_pcm = np.frombuffer(wav.readframes(wav.getnframes()), dtype='<i2')
+        samples = mono_pcm.astype(np.float32) / 32768
         peak = float(np.max(np.abs(samples)))
-        end = start + len(samples) / 16000
-        result = {'start_seconds': start, 'end_seconds': end, 'samples': len(samples), 'sample_rate': 16000,
+        end = start + len(samples) / analysis_rate
+        result = {'start_seconds': start, 'end_seconds': end, 'samples': len(samples), 'sample_rate': analysis_rate,
+                  'source_sample_rate_hz': source_rate, 'analysis_sample_rate_hz': analysis_rate,
                   'rms_dbfs': dbfs(np.sqrt(np.mean(samples ** 2))), 'peak_dbfs': dbfs(peak),
                   'recording_setup_status': 'unknown_from_audio_analysis',
                   'recording_setup_scope': ('The measurements describe the decoded file. '
@@ -252,17 +399,23 @@ def audio_excerpt(path, start=0, duration=30, transcribe=True, channel=None):
                                 'digital_silence': channel_dbfs[i] is None,
                                 'gain_headroom_db': max(0.0, -channel_dbfs[i]) if channel_dbfs[i] is not None else None,
                                 'samples_at_full_scale': int(full_scale[i])} for i in range(channel_count)],
-                  'sound_event_hints': sound_events(samples) if peak else []}
+                  'sound_event_hints': []}
+        separate = None
         if channel_count == 2:
             difference = np.abs(decoded[:, 0] - decoded[:, 1])
             difference_peak = float(difference.max())
             result['decoded_stereo_channels_identical'] = difference_peak == 0
             result['decoded_stereo_difference_peak_dbfs'] = dbfs(difference_peak)
             result['stereo_difference_peak_relative_to_loudest_channel_db'] = dbfs(difference_peak / loudest_peak) if loudest_peak else None
+            if include_stereo and difference_peak:
+                separate = stereo_signal(stereo, analysis_rate, limit)
+        if peak or separate is not None:
+            result.update(sound_events(samples, start, analysis_rate, separate))
         if channel is None:
             result['mono_peak_change_from_loudest_channel_db'] = dbfs(peak / loudest_peak) if peak and loudest_peak else None
             result['mono_analysis_silence'] = peak == 0
-            analysis_scope = ('Speech and event hints use the mono mix. A negative mono peak change is measured '
+            analysis_scope = ('Main speech and event hints use the mono mix. Separate channel estimates, when present, '
+                              'use the individual decoded channels. A negative mono peak change is measured '
                               'attenuation versus the loudest original channel, including when caused by averaging. '
                               'A silent mix has no finite peak change. ')
         else:
@@ -271,27 +424,32 @@ def audio_excerpt(path, start=0, duration=30, transcribe=True, channel=None):
             analysis_scope = (f'Speech, event hints and excerpt levels use only channel {channel}. '
                               'The channel measurements still cover every original channel. '
                               'Channel separation does not identify speakers or separate voices mixed into one channel. ')
+        if transcribe:
+            result['transcription_status'] = 'analysis_signal_digital_silence' if not peak else 'no_words_returned'
+        else:
+            result['transcription_status'] = 'not_requested'
         if transcribe and peak:
-            sys.path.insert(0, str(MEDIA))
-            from transcribe_local import transcribe as pinned_transcribe
-            receipt = pinned_transcribe(excerpt, Path(folder) / 'transcript')
-            result['speech_text'] = receipt['text']
-            raw = json.loads(Path(receipt['transcript_path']).read_text(encoding='utf-8'))
-            if isinstance(raw.get('words'), list):
-                result['words_relative_to_excerpt'] = raw['words']
+            result.update(speech_estimate(excerpt, folder / 'transcript', mono_pcm, analysis_rate))
+        if transcribe and separate is not None:
+            result['channel_transcripts'] = stereo_speech_estimates(separate, folder, analysis_rate)
         if media_seconds is not None:
             result['next_start_seconds'] = end if end < media_seconds - .002 else None
         result['scope'] = (analysis_scope +
+                           'The source sample rate is the codec stream rate. The analysis rate belongs to the resampled model input. '
                            'A channel marked digitally silent has decoded zero samples throughout the window. '
                            'Each nonzero span is a decoded channel envelope relative to the excerpt start. '
                            'Its exclusive end is one sample after the last nonzero sample. Add start_seconds '
                            'for recording time. A span can contain silent intervals and does not measure speech. '
-                           'Transcript word times estimate speech timing and can extend beyond measured signal. '
+                           'Word times estimate speech timing. If materially outside decoded activity, Pi rechecks the '
+                           'timing in the active window and retains it only when the recognized text still matches. '
+                           'An inconsistent word-time result does not support timing or overlap. '
                            'Peak, RMS and stereo-difference values in dBFS are relative to digital full scale. '
                            'Use the relative-to-loudest-channel dB fields when comparing peaks or RMS. '
                            'Peak and RMS have separate references. Null means there is no finite level or reference. '
-                           'Similar channel peaks or RMS do not establish identical waveforms. For overlapping voices '
-                           'in stereo, select each channel separately before interpreting timing or transcription. '
+                           'Similar channel peaks or RMS do not establish identical waveforms. Use the separate stereo '
+                           'estimates when present, or select a channel and window for closer inspection. '
+                           'Estimated word spans enclose recognized words, including gaps, and do not establish exact overlap. '
+                           'Shorter sound windows can report additional whole-window candidates absent from the broader halves. '
                            'Describe sound labels as candidates. Classifier scores do not verify an event or identify '
                            'its source or establish that two events do not overlap. Channel measurements and '
                            'classifier labels do not establish microphone placement, rooms or recording conditions. '

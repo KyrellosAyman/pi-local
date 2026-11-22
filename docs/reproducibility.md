@@ -99,6 +99,18 @@ For the optional Chrome workflow, open the approved page in the intended Chrome 
 
 In Pi, select **Audio report**, choose a local recording, then set the window and optional channel. Pi displays decoded levels and their channel references, plus provisional sound labels and a speech transcript. This route uses the local media runtime directly and requires no chat model. The audio alone leaves the recording setup and speaker identities unresolved.
 
+### Verify local listening
+
+After setup with `& '.\Setup Pi.ps1' -Audio -Download`, run the generated media fixtures from the checkout. They exercise decoded samples, stereo comparisons, image and video inspection, and correction of an invalid speech time range. The speech timing control substitutes known recognizer outputs. It checks how Pi pairs words with timestamps.
+
+```powershell
+& .\.venv\Scripts\python.exe -B .\agent-clients-v8\pi-gui\verify_media.py
+```
+
+For a live check, open a scratch workspace in Pi with two WAV files you can independently review, each under 30 seconds. Submit a single prompt such as “Analyze recording-01.wav and recording-02.wav. Report recoverable speech, channel differences, timed sound candidates and what remains uncertain.” Let Pi finish its reviewed plan. Compare the saved report with the files. Confirm that each recording has measured channel levels, the source and analysis rates are separate, and speech times are marked as estimates. Compare the words and sound windows against your independent reference. Use the same files and prompt when retesting a change.
+
+The reported studies used controlled mixtures from independently attributed recordings. The public fixtures generate their own inputs. Read the [listening evidence](../research/evidence/2026-11-22-listening.md) for the frozen grading criteria, failures and matched replays.
+
 The paper discusses additional science, Android, repository, video, and integration cases. The public release includes their measured summaries. Exact reruns that depend on private projects, signed-in accounts, or unpublished graders still need a separate public fixture. Use your own equivalent input and document the difference.
 
 ## Build the paper

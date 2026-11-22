@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { Type } from "typebox";
+import { registerAudioFindings } from "./audio-findings.ts";
 
 const pathArgument = Type.String({ description: "A local path from the message or the selected workspace." });
 const nonnegative = Type.Integer({ minimum: 0 });
@@ -47,6 +48,7 @@ export default function analysisTools(pi) {
 	const python = process.env.PI_LOCAL_ANALYSIS_PYTHON;
 	const script = process.env.PI_LOCAL_ANALYSIS_SCRIPT;
 	if (!python || !script) return;
+	const retainAudio = registerAudioFindings(pi);
 
 	const tools = [
 		["inspect_input", "Inspect local input", "Identify a local file's size and media streams or list a workspace folder.", "info",
@@ -59,13 +61,13 @@ export default function analysisTools(pi) {
 				times: Type.Optional(Type.Array(Type.Number({ minimum: 0 }), { minItems: 1, maxItems: 8 })),
 				frames: Type.Optional(Type.Array(nonnegative, { minItems: 1, maxItems: 8 })),
 				region: Type.Optional(regionArgument) })],
-		["analyze_audio", "Analyze sound", "Measure decoded audio, classify sound event candidates and optionally transcribe speech using local CPU models. For interpretation use the local-media-review skill. Use the stereo equality field to decide whether samples match. Report nonzero sample spans and estimated speech times separately. A selected window can verify overlap around that region while leaving its boundaries unknown. Recording setup remains unknown. Use successive windows for long recordings.", "audio",
+		["analyze_audio", "Analyze sound", "Measure decoded audio, classify sound event candidates and optionally transcribe speech using local CPU models. A default analysis of different stereo waveforms also estimates each channel's speech in the same window. Reuse those results before requesting narrower windows. For interpretation use the local-media-review skill. Use the stereo equality field to decide whether samples match. Report nonzero sample spans and estimated speech times separately. Recording setup remains unknown. Use successive windows for long recordings.", "audio",
 			Type.Object({ path: pathArgument, start: Type.Optional(Type.Number({ minimum: 0,
 				description: "Offset from the beginning in seconds. Omit to start at zero. Keep it before the recording ends." })),
 				duration: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 30,
-					description: "Length of the requested window in seconds. Omit to analyze up to 30 seconds from the offset." })),
+					description: "Window length in seconds. Omit to analyze up to 30 seconds from the offset." })),
 				transcribe: Type.Optional(Type.Boolean()),
-				channel: Type.Optional(Type.Integer({ minimum: 1, description: "One-based source channel (1 for left, 2 for right in stereo). Omit for mono. For overlapping or differing stereo signals, call both channels separately; time windows do not separate channels." })) })],
+				channel: Type.Optional(Type.Integer({ minimum: 1, description: "One-based source channel. Omit for the mono mix and separate speech estimates when the stereo waveforms differ." })) })],
 		["read_document", "Read a document", "Read a local PDF, Office document, ZIP inventory or source/text file in pages. All offsets start at zero. Follow continuation or next_byte_offset to read further. For saved web pages, set readable_html to true and follow next_offset for the extracted text. PDFs can render a requested page for vision.", "document",
 			Type.Object({ path: pathArgument, offset: Type.Optional(nonnegative),
 				count: Type.Optional(Type.Integer({ minimum: 1, maximum: 16 })), sheet: Type.Optional(Type.String()),
@@ -78,7 +80,8 @@ export default function analysisTools(pi) {
 		pi.registerTool({
 			name, label, description, parameters,
 			async execute(_id, input, signal, _onUpdate, ctx) {
-				return inspect(python, script, mode, input, ctx.cwd, signal);
+				const analyze = () => inspect(python, script, mode, input, ctx.cwd, signal);
+				return mode === "audio" ? retainAudio(input, ctx, analyze) : analyze();
 			},
 		});
 	}
