@@ -86,6 +86,7 @@ Copy each [R03 and R05 workspace](../research/uncertainty/) to separate scratch 
 ## Optional local components
 
 - Local MCP examples include the [text checksum server](../agent-clients-v8/pi-gui/examples/text-integrity-mcp.py) and [workspace script server](../agent-clients-v8/pi-gui/pi_process_mcp.py). Register only explicitly chosen servers in the checkout's local Pi profile.
+- For an OAuth server, a nonempty `oauth.scope` in `mcp.json` limits the scopes Pi requests and accepts. Sign in again after narrowing that setting if an earlier grant exceeded the new scope or did not report its scope. Run `node .\scripts\verify_mcp_scope_policy.mjs .\agent-clients-v8` after setup to check the bundled launcher against a temporary local issuer.
 - PDF inspection uses PyMuPDF 1.27.2.2. To set up audio analysis, run `& '.\Setup Pi.ps1' -Audio -Download` from the checkout. Setup installs the pinned audio packages in Pi’s Python environment and verifies the local media runtime against the published digests. For an offline setup, use `-OfflineDependencies -Audio` with the audio Python packages already installed. Provide the files named in the media manifest under `.local/assets/` or keep the verified installed runtime. [Pinned audio packages](../requirements-audio.txt) [Media manifest](../agent-clients-v8/pi-gui/media/runtime-pins.json)
 
 Place verified audio and video components under `agent-clients-v8/pi-gui/runtime/audio/`.
@@ -106,8 +107,8 @@ Install [the paper requirements](../research/requirements.txt) in the same virtu
 
 ```powershell
 & .\.venv\Scripts\python.exe -m pip install -r .\research\requirements.txt
-& .\.venv\Scripts\python.exe -B .\research\render_paper.py 0.1.5
-& .\.venv\Scripts\python.exe -B .\research\render_paper.py 0.1.5 --check
+& .\.venv\Scripts\python.exe -B .\research\render_paper.py 0.1.6
+& .\.venv\Scripts\python.exe -B .\research\render_paper.py 0.1.6 --check
 ```
 
-This checkout contains the [editable report](../research/PAPER.md) and the [0.1.5 PDF](../research/pi-local-v0.1.5.pdf). The [release history](releasing.md#release-history) links to the previous papers.
+This checkout contains the [editable report](../research/PAPER.md) and the [0.1.6 PDF](../research/pi-local-v0.1.6.pdf). The [release history](releasing.md#release-history) links to the previous papers.

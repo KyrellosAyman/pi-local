@@ -44,6 +44,8 @@ if ($Audio) {
 }
 $cli = Join-Path $client 'node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js'
 if (-not (Test-Path -LiteralPath $cli)) { throw 'Install the pinned Node dependencies before offline setup.' }
+& $venvPython -I -B (Join-Path $PSScriptRoot 'scripts/apply_mcp_scope_policy.py') $client
+if ($LASTEXITCODE -ne 0) { throw 'Could not apply the Pi MCP OAuth scope policy.' }
 $setupArguments = @('--profile', $Profile)
 if ($Download) { $setupArguments += '--download' }
 if ($Audio) { $setupArguments += '--audio' }

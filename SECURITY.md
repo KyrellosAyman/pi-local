@@ -4,6 +4,8 @@ The supplied workflow uses a single authenticated model endpoint on 127.0.0.1. S
 
 The Windows launcher rejects a foreign model listener and relies on the bundled loopback settings. Webpage tools and outside skill directories are disabled in a fresh release profile. Browser or desktop integrations require a separately supplied driver. Local state and the default workspace are separate from the tracked release files.
 
+For an optional MCP OAuth connection, `oauth.scope` limits which scopes Pi requests and accepts when you set it to a nonempty list of space-separated scopes. Sign in again after narrowing it if the prior grant was broader or did not report its scope. Keep MCP profiles and credential stores private.
+
 Pi can execute local tools with the permissions of the Windows user. Use a scratch workspace for untrusted files and keep the model endpoint on loopback. The Windows desktop process is not an OS sandbox. Avoid granting access to credentials, broad home directories, or private browser data through custom tools. Review any shell, MCP or browser integration before enabling it.
 
 Report suspected credential disclosure or a security defect through [GitHub private vulnerability reporting](https://github.com/KyrellosAyman/pi-local/security/advisories/new). Include the release and affected surface without posting credentials, raw chats or signed-in browser data in a public issue.

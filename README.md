@@ -2,7 +2,7 @@
 
 Pi Local is a Windows desktop harness for local model inference, tool use, and resumable jobs. Pi starts its own model service. The default release uses authenticated loopback, local workspace tools, and a checkout-specific state directory. It needs no API account or API key from the user.
 
-[Research paper, v0.1.5](research/pi-local-v0.1.5.pdf) · [Reproduction guide](docs/reproducibility.md) · [Evaluation ledger](research/evidence/2026-11-22-desktop-performance.md) · [Releases](https://github.com/KyrellosAyman/pi-local/releases)
+[Research paper, v0.1.6](research/pi-local-v0.1.6.pdf) · [Reproduction guide](docs/reproducibility.md) · [Evaluation ledger](research/evidence/2026-11-22-mcp-oauth.md) · [Releases](https://github.com/KyrellosAyman/pi-local/releases)
 
 ## Install on Windows
 
