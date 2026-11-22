@@ -10,6 +10,7 @@
 | 0.1.3 | Clickable clarification, first-plan review with recovery, and near-64k text workflow evidence | [Research release](https://github.com/KyrellosAyman/pi-local/releases/tag/v0.1.3) |
 | 0.1.4 | Accept complete plans in one review, route scoped Chrome reads, and document matched prompt-cache experiments | [Research release](https://github.com/KyrellosAyman/pi-local/releases/tag/v0.1.4) |
 | 0.1.5 | Show the active plan-review phase, correct the shared speed meter, and report the long-context slowdown | [Research release](https://github.com/KyrellosAyman/pi-local/releases/tag/v0.1.5) |
+| 0.1.6 | Enforce configured MCP OAuth scopes and verify sign-in and refresh through the bundled launcher | [Research release](https://github.com/KyrellosAyman/pi-local/releases/tag/v0.1.6) |
 
 ## Update the record and publish
 

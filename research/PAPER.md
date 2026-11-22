@@ -3,7 +3,7 @@
 
 **KyrellosAyman**
 
-Technical report • Version 0.1.5 • 22 November 2026
+Technical report • Version 0.1.6 • 22 November 2026
 
 ### Abstract
 
@@ -147,6 +147,8 @@ A subsequent matched browser test exposed two retries when the reviewer describe
 
 The regular desktop initiated and used the native model in an isolated profile while the legacy applications were closed. The cold-start test took 54.88 seconds from GUI launch to verified settlement. A later test unloaded the idle model and started a new native process on the next prompt in the same chat, preserving the chat byte prefix and exact outputs. Five MCP registrations, a local checksum tool discovery and invocation, and a scoped Windows Calculator calculation passed. Detached history retained 2,990 messages and returned an exact 8,933-character sample across five pages. The public repository excludes the archive itself. In a signed-in Chrome tab, a normal Pi chat verified one approved control using its own catalog and filtered reader. The run made no page action and returned only the requested control from the browser tool. The routing change removed a redundant skill search and a discovery call in the matched retake. Production OAuth, broader integrations and retirement checks remain open.
 
+Pi applies explicitly configured MCP OAuth scopes during sign-in, stored-token use and refresh. The bundled CLI passed five loopback scenarios, including rejection of broader grants and an authenticated catalog read after refresh in a new process. Fresh and offline setups reproduced the result. The five configured servers still listed 69 tools. A production read-only endpoint produced a read-only authorization request with PKCE and the expected resource and loopback callback. The production test stopped at browser handoff. Account consent and an authenticated read remain open. [9]
+
 The audio analyzer identified 7,760 full-scale samples on one channel, found the other channel digitally silent, and reported the measured 6.02 dB downmix change in a fresh blind Pi chat. Real overlapping recordings tested channel selection. One narration transcription differed in spelling normalization, and a non-speech classifier made an unsupported animal suggestion on a speech sample. An empty transcript and high classification scores require separate interpretation. Broader fresh-chat listening accuracy remains open.
 
 Another Pi audio call failed because its restricted Windows child lacked NumPy. The staged setup pins five optional Python packages in Pi's own environment. A fresh installation and offline check passed. The registered tool returned the same synthetic narration with both CPU runtimes. In nine windows from three archived recording mixtures, the new environment matched four previous transcript and sound classification results and kept the recording setup unknown in every case. With overlapping speech, the mono transcript contained seven errors against the dominant 22-word reference. Separate channels yielded zero errors in that reference and only a title abbreviation in the other. The installer used fixture asset provisioning, and the audio checks used separately verified local media assets.
@@ -204,3 +206,5 @@ Pi has demonstrated a standalone local model lifecycle, exact elapsed archive re
 [7] KyrellosAyman. 2026. [v0.1.4 matched results](https://github.com/KyrellosAyman/pi-local/blob/v0.1.4/research/evidence/2026-11-22-follow-up.md). ggml-org and contributors. [Pinned native server completion and prompt-cache documentation](https://github.com/ggml-org/llama.cpp/blob/b12541/tools/server/README.md).
 
 [8] KyrellosAyman. 2026. [v0.1.5 desktop and long-context results](https://github.com/KyrellosAyman/pi-local/blob/v0.1.5/research/evidence/2026-11-22-desktop-performance.md).
+
+[9] KyrellosAyman. 2026. [v0.1.6 MCP OAuth scope results](https://github.com/KyrellosAyman/pi-local/blob/v0.1.6/research/evidence/2026-11-22-mcp-oauth.md).
