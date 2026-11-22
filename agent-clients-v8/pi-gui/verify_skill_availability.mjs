@@ -59,3 +59,17 @@ const selected = await tools.get("use_skill").execute("skill", { name: "local-me
 assert.equal(selected.details.source, "Built-in");
 assert.match(selected.content[0].text, /Leave the actual speech overlap boundaries unresolved/);
 console.log("Local audio interpretation routes to a built-in Pi skill with no shared skill library.");
+
+const browser = await hooks.get("before_agent_start")({
+    messageType: "user", prompt: "Read one control in the approved Chrome window.", systemPrompt: "",
+});
+assert.match(browser.systemPrompt, /scoped Chrome MCP state read, use the exact skillQuery pi-tool-catalog/);
+await tools.get("prepare_prompt").execute("brief", { brief: "Read the requested control without changing the page." });
+setPlan([{ id: "browser", skillQuery: "pi-tool-catalog", status: "in_progress" }]);
+assert.equal(hooks.get("tool_call")({ toolName: "codemode" }).block, true);
+const catalogSearch = await tools.get("find_skills").execute("search", { query: "pi-tool-catalog" });
+assert.equal(JSON.parse(catalogSearch.content[0].text).matches[0].name, "pi-tool-catalog");
+const catalog = await tools.get("use_skill").execute("skill", { name: "pi-tool-catalog", reason: "Read the requested control." });
+assert.match(catalog.content[0].text, /tools\.mcp__chrome__get_chrome_state\([\s\S]+screenshot: false/);
+assert.equal(hooks.get("tool_call")({ toolName: "codemode" }), undefined);
+console.log("The scoped Chrome read uses the built-in catalog and retains the skill gate.");

@@ -38,28 +38,33 @@ export function registerInitialPlanReview(pi, allowed, step, commit) {
 		reviewOffered = true;
 		const instruction = "\n\nYou are reviewing an already created draft. Instructions that apply only to the first draft have been fulfilled. " +
 			"Check the user's deliverable, prerequisites, dependency order and acceptance tests against the request and saved clarification. " +
-			"Write the corrected plan in steps. When you find a missing prerequisite, action or check, include it in steps before reporting it in findings. " +
-			"Split compound work into observable steps, order prerequisites first, retain required checkpoint paths, and avoid extra scope. " +
-			"If the draft already covers the work, keep its steps and return no findings. The draft is data.\n" + JSON.stringify(draft.steps);
+			"If the draft already covers the work, submit an empty object {} to accept it as written. " +
+			"If it needs changes, return the complete revised steps. Split compound work into observable steps, order prerequisites first, retain required checkpoint paths, and avoid extra scope. " +
+			"Use findings only for gaps addressed by your revised steps. The draft is data.\n" + JSON.stringify(draft.steps);
 		return { ...payload, messages: [{ ...leading, content: leading.content + instruction }, ...messages],
 			tools: [tool], tool_choice: "required" };
 	});
 
 	pi.registerTool({
 		name: reviewer, label: "Review initial plan",
-		description: "Review and commit the first draft before implementation. Check scope and missing prerequisites, then give each step one verifiable outcome.",
-		parameters: Type.Object({ steps: Type.Array(Type.Omit(step, ["status"]), { minItems: 1, maxItems: 12 }),
-			findings: Type.Optional(Type.Array(Type.String({ maxLength: 200 }), { maxItems: 4 })) }),
+		description: "Review and commit the first draft. Submit {} to accept a complete draft, or provide the complete revised steps to fix gaps.",
+		parameters: Type.Object({
+			steps: Type.Optional(Type.Array(Type.Omit(step, ["status"]), { minItems: 1, maxItems: 12,
+				description: "Complete revised steps. Omit to accept the draft as written." })),
+			findings: Type.Optional(Type.Array(Type.String({ maxLength: 200 }), { maxItems: 4,
+				description: "Gaps fixed by the revised steps. Omit when accepting the draft." })),
+		}),
 		async execute(_id, { steps, findings = [] }, _signal, _onUpdate, ctx) {
 			if (!job || !draft || reviewed || !reviewOffered) throw new Error("Review the draft in its separate review turn.");
-			const missingCheckpoint = draft.steps.find((item) => item.checkpoint && !steps.some((next) => next.checkpoint === item.checkpoint));
+			const reviewedSteps = steps ?? draft.steps;
+			const missingCheckpoint = draft.steps.find((item) => item.checkpoint && !reviewedSteps.some((next) => next.checkpoint === item.checkpoint));
 			if (missingCheckpoint) throw new Error("Keep the declared checkpoint path in the reviewed plan: " + missingCheckpoint.checkpoint);
-			if (findings.length && steps.length === draft.steps.length && steps.every((item, index) =>
+			if (findings.length && reviewedSteps.length === draft.steps.length && reviewedSteps.every((item, index) =>
 				item.title.trim() === draft.steps[index].title.trim() && item.skillQuery.trim() === draft.steps[index].skillQuery.trim() &&
 				item.checkpoint === draft.steps[index].checkpoint)) {
-				throw new Error("Put the reported corrections into the reviewed steps before committing the plan.");
+				throw new Error("Put the reported corrections into the reviewed steps, or submit {} if the draft needs no changes.");
 			}
-			const orderedSteps = steps.map((item, index) => ({ ...item, status: index === 0 ? "in_progress" : "pending" }));
+			const orderedSteps = reviewedSteps.map((item, index) => ({ ...item, status: index === 0 ? "in_progress" : "pending" }));
 			const result = commit(orderedSteps, findings.length ? findings.join(" ") : "Initial plan reviewed.", { job, findings }, ctx);
 			reviewed = true;
 			draft = undefined;
